@@ -125,7 +125,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
+app = FastAPI(
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
+)
 app.include_router(auth_router)
 app.include_router(products_router)
 app.include_router(customers_router)
@@ -174,3 +178,5 @@ def database_test():
             "database": "connected",
             "result": result.scalar()
         }
+
+
