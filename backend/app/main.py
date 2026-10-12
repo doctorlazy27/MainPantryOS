@@ -111,6 +111,9 @@ app = FastAPI(
     description="Backend API for managing food warehouse operations.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 cors_origins = os.getenv("CORS_ORIGINS") or (
@@ -125,11 +128,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-app = FastAPI(
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None
-)
+
 app.include_router(auth_router)
 app.include_router(products_router)
 app.include_router(customers_router)
