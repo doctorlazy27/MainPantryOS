@@ -28,6 +28,7 @@ from app.models.customer import Customer
 from app.routers.customers import router as customers_router
 from app.models.order import SalesOrder
 from app.models.order_item import SalesOrderItem
+from app.models.order_inventory_reservation import OrderInventoryReservation
 from app.routers.orders import router as orders_router
 from app.models.supplier import Supplier
 from app.routers.suppliers import router as suppliers_router
@@ -116,14 +117,20 @@ app = FastAPI(
     openapi_url=None,
 )
 
-cors_origins = os.getenv("CORS_ORIGINS") or (
+default_cors_origins = (
     "http://localhost:5173,http://127.0.0.1:5173,"
-    "http://localhost:8081,http://127.0.0.1:8081,https://localhost"
+    "http://localhost:8081,http://127.0.0.1:8081"
 )
+cors_origins = [origin.strip() for origin in (os.getenv("CORS_ORIGINS") or default_cors_origins).split(",") if origin.strip()]
+if "*" in cors_origins:
+    raise ValueError("CORS_ORIGINS must list explicit origins; wildcard origins are not allowed")
+for mobile_origin in ("https://localhost", "http://localhost"):
+    if mobile_origin not in cors_origins:
+        cors_origins.append(mobile_origin)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in cors_origins.split(",") if origin.strip()],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],

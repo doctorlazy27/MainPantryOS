@@ -3,7 +3,7 @@ import { Barcode, Camera, ScanLine } from 'lucide-react'
 import { Capacitor } from '@capacitor/core'
 import { Haptics, NotificationType } from '@capacitor/haptics'
 import { BarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
-import { checkoutCounter, lookupCounterBarcode } from './api'
+import { checkoutCounter } from './api'
 
 type ScanResult = { id: string; code: string; name: string; remaining: number; bill: string }
 type Props = { onToast: (message: string) => void }
@@ -12,19 +12,29 @@ export default function CheckoutPanel({ onToast }: Props) {
   const [code, setCode] = useState('')
   const [scans, setScans] = useState<ScanResult[]>([])
   const [processing, setProcessing] = useState(false)
+  const [pendingScan, setPendingScan] = useState<{ code: string; requestKey: string } | null>(null)
 
   async function processCode(rawCode: string) {
     const value = rawCode.trim()
     if (!value || processing) return
     setProcessing(true)
     try {
-      const found = await lookupCounterBarcode(value)
-      const result = await checkoutCounter({ items: [{ scanned_code: value, quantity: 1 }] })
-      const remaining = found.available_quantity - 1
-      setScans((items) => [{ id: `${result.sale_id}-${value}`, code: value, name: found.product_name, remaining, bill: result.bill_number }, ...items].slice(0, 30))
+      const requestKey = pendingScan?.code === value ? pendingScan.requestKey : crypto.randomUUID()
+      setPendingScan({ code: value, requestKey })
+      const result = await checkoutCounter({ request_key: requestKey, items: [{ scanned_code: value, quantity: 1 }] })
+      if (result.duplicate) {
+        setCode('')
+        setPendingScan(null)
+        onToast(`Sale ${result.bill_number} was already recorded`)
+        return
+      }
+      const remaining = result.remaining_quantity
+      setScans((items) => [{ id: `${result.sale_id}-${value}`, code: value, name: result.product_name, remaining, bill: result.bill_number }, ...items].slice(0, 30))
       setCode('')
-      onToast(`${found.product_name} sold. ${remaining} units remain.`)
+      setPendingScan(null)
+      onToast(`${result.product_name} sold. ${remaining} units remain.`)
     } catch (error) {
+      setCode(value)
       onToast(error instanceof Error ? error.message : 'Could not reduce counter stock')
     } finally {
       setProcessing(false)

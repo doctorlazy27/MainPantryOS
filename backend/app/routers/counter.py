@@ -4,6 +4,7 @@ from uuid import uuid4
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_permission
@@ -23,6 +24,7 @@ from app.services.inventory_guard import require_available_batch
 from app.services.notification import create_notification, notify_roles
 from app.services.ai_assistant import answer_warehouse_question
 from app.services.ai_provider import AIProviderError
+from app.services.order_reservations import available_quantity
 
 router = APIRouter(prefix="/counter", tags=["Counter"])
 logger = logging.getLogger(__name__)
@@ -45,6 +47,25 @@ def _counter_row(db: Session, row: CounterInventory):
         "expiry_date": batch.expiry_date if batch else None,
         "status": status,
         "last_replenished_at": row.last_replenished_at,
+    }
+
+
+def _checkout_result(db: Session, sale: CounterSale, duplicate: bool):
+    item = db.query(CounterSaleItem).filter(CounterSaleItem.sale_id == sale.sale_id).order_by(CounterSaleItem.sale_item_id.asc()).first()
+    product = db.query(Product).filter(Product.product_id == item.product_id).first() if item else None
+    remaining = db.query(CounterInventory.quantity).filter(
+        CounterInventory.warehouse_id == sale.warehouse_id,
+        CounterInventory.product_id == item.product_id,
+        CounterInventory.batch_id == item.batch_id,
+    ).scalar() if item else None
+    return {
+        "sale_id": sale.sale_id,
+        "bill_number": sale.bill_number,
+        "total_amount": sale.total_amount,
+        "created_at": sale.created_at,
+        "product_name": product.name if product else "Unknown product",
+        "remaining_quantity": int(remaining or 0),
+        "duplicate": duplicate,
     }
 
 
@@ -89,13 +110,15 @@ def approve_counter_allocation(allocation_id: int, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Pending counter allocation not found")
     remaining = allocation.quantity
     warehouse_rows = db.query(Inventory, Batch).join(Batch, Inventory.batch_id == Batch.batch_id).filter(Inventory.warehouse_id == allocation.warehouse_id, Inventory.product_id == allocation.product_id, Inventory.quantity > 0, Inventory.putaway_status == "confirmed", Batch.status == "active", Batch.expiry_date > date.today()).order_by(Batch.expiry_date.asc()).with_for_update().all()
-    if sum(row.quantity for row, _ in warehouse_rows) < remaining:
+    if sum(available_quantity(db, row) for row, _ in warehouse_rows) < remaining:
         raise HTTPException(status_code=400, detail="Not enough valid warehouse stock for this allocation")
     for warehouse_row, batch in warehouse_rows:
         if remaining <= 0:
             break
         require_available_batch(db, batch.batch_id)
-        moved = min(remaining, warehouse_row.quantity)
+        moved = min(remaining, available_quantity(db, warehouse_row))
+        if moved <= 0:
+            continue
         warehouse_row.quantity -= moved
         counter = db.query(CounterInventory).filter(CounterInventory.warehouse_id == allocation.warehouse_id, CounterInventory.product_id == allocation.product_id, CounterInventory.batch_id == batch.batch_id).with_for_update().first()
         if counter is None:
@@ -115,8 +138,33 @@ def approve_counter_allocation(allocation_id: int, db: Session = Depends(get_db)
     return {"allocation_id": allocation_id, "status": allocation.status, "message": "Stock transferred to counter using FEFO"}
 
 
+@router.patch("/allocations/{allocation_id}/reject")
+def reject_counter_allocation(allocation_id: int, db: Session = Depends(get_db), current_user: dict = Depends(require_permission("approve_counter_allocation"))):
+    allocation = db.query(CounterAllocation).filter(
+        CounterAllocation.allocation_id == allocation_id,
+        CounterAllocation.warehouse_id == current_user.get("warehouse_id"),
+        CounterAllocation.status == "pending",
+    ).with_for_update().first()
+    if allocation is None:
+        raise HTTPException(status_code=404, detail="Pending counter allocation not found")
+    allocation.status = "rejected"
+    allocation.reviewed_by = current_user["user_id"]
+    allocation.reviewed_at = datetime.utcnow()
+    create_notification(db, allocation.requested_by, "Counter replenishment rejected", f"Counter allocation #{allocation_id} was rejected.", "counter_replenishment_rejected")
+    log_activity(db, current_user["user_id"], current_user["username"], "COUNTER_ALLOCATION_REJECTED", f"Rejected counter allocation #{allocation_id}.")
+    db.commit()
+    return {"allocation_id": allocation_id, "status": allocation.status}
+
+
 @router.post("/checkout")
 def checkout(checkout: CheckoutCreate, db: Session = Depends(get_db), current_user: dict = Depends(require_permission("checkout_counter"))):
+    request_key = checkout.request_key or str(uuid4())
+    previous_sale = db.query(CounterSale).filter(
+        CounterSale.worker_id == current_user["user_id"],
+        CounterSale.request_key == request_key,
+    ).first()
+    if previous_sale is not None:
+        return _checkout_result(db, previous_sale, True)
     process_expiry(db)
     warehouse_id = current_user.get("warehouse_id")
     prepared = []
@@ -128,27 +176,43 @@ def checkout(checkout: CheckoutCreate, db: Session = Depends(get_db), current_us
             if known is not None and known[0] <= 0:
                 raise HTTPException(status_code=400, detail="Out of counter stock")
             raise HTTPException(status_code=404, detail="Product not found at counter")
-        counter, product, batch, _, warehouse_inventory = match
-        prepared.append((counter, product, batch, warehouse_inventory, requested.quantity))
+        counter, product, batch, boxed_unit, warehouse_inventory = match
+        prepared.append((counter, product, batch, warehouse_inventory, boxed_unit, requested.quantity))
         total += requested.quantity * product.price
     quantities_by_counter = {}
-    for counter, _, _, _, quantity in prepared:
+    quantities_by_boxed_unit = {}
+    for counter, _, _, _, boxed_unit, quantity in prepared:
         quantities_by_counter[counter.counter_inventory_id] = (counter, quantities_by_counter.get(counter.counter_inventory_id, (counter, 0))[1] + quantity)
+        quantities_by_boxed_unit[boxed_unit.boxed_unit_id] = (boxed_unit, quantities_by_boxed_unit.get(boxed_unit.boxed_unit_id, (boxed_unit, 0))[1] + quantity)
     for counter, quantity in quantities_by_counter.values():
         if counter.quantity < quantity:
             raise HTTPException(status_code=400, detail=f"Insufficient counter stock for product {counter.product_id}")
-    sale = CounterSale(warehouse_id=warehouse_id, bill_number=f"INV-{datetime.utcnow():%Y%m%d%H%M%S}-{uuid4().hex[:4].upper()}", total_amount=total, worker_id=current_user["user_id"])
+    for boxed_unit, quantity in quantities_by_boxed_unit.values():
+        if boxed_unit.remaining_units < quantity:
+            raise HTTPException(status_code=400, detail=f"Barcode has only {boxed_unit.remaining_units} units remaining")
+    sale = CounterSale(warehouse_id=warehouse_id, bill_number=f"INV-{datetime.utcnow():%Y%m%d%H%M%S}-{uuid4().hex[:4].upper()}", total_amount=total, worker_id=current_user["user_id"], request_key=request_key)
     db.add(sale)
-    db.flush()
-    for counter, product, batch, warehouse_inventory, quantity in prepared:
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        duplicate_sale = db.query(CounterSale).filter(
+            CounterSale.worker_id == current_user["user_id"],
+            CounterSale.request_key == request_key,
+        ).first()
+        if duplicate_sale is None:
+            raise
+        return _checkout_result(db, duplicate_sale, True)
+    for counter, product, batch, warehouse_inventory, boxed_unit, quantity in prepared:
         counter.quantity -= quantity
+        boxed_unit.remaining_units -= quantity
         db.add(CounterSaleItem(sale_id=sale.sale_id, product_id=product.product_id, batch_id=batch.batch_id, quantity=quantity, unit_price=product.price, line_total=quantity * product.price))
         db.add(InventoryMovement(inventory_id=warehouse_inventory.inventory_id, product_id=product.product_id, batch_id=batch.batch_id, warehouse_id=warehouse_id, movement_type="SOLD_COUNTER", event_key=f"counter_sale:{sale.sale_id}:{product.product_id}:{batch.batch_id}", quantity=quantity, actor_id=current_user["user_id"], actor_name=current_user["username"], reason=f"Counter checkout {sale.bill_number}."))
         if counter.quantity < counter.minimum_level:
             notify_roles(db, {"manager"}, "Counter stock low", f"Counter stock for {product.name} is {counter.quantity}; minimum is {counter.minimum_level}.", "counter_low_stock", warehouse_id)
     log_activity(db, current_user["user_id"], current_user["username"], "COUNTER_CHECKOUT", f"Generated bill {sale.bill_number} for {total:.2f}.")
     db.commit()
-    return {"sale_id": sale.sale_id, "bill_number": sale.bill_number, "total_amount": total, "created_at": sale.created_at}
+    return _checkout_result(db, sale, False)
 
 
 @router.get("/sales")

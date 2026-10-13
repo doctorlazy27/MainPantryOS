@@ -87,7 +87,7 @@ export default function MessagingPanel({ role }: Props) {
       <h2>Send a message</h2>
       <form className="stack-form" onSubmit={submit}>
         {!broadcast && <fieldset className="recipient-field"><legend>Recipients</legend>{contacts.length ? <div className="recipient-list">{contacts.map((contact) => <label className={`recipient-option ${selected.includes(contact.user_id) ? 'selected' : ''}`} key={contact.user_id}><input type={role === 'manager' ? 'checkbox' : 'radio'} name="message-recipient" checked={selected.includes(contact.user_id)} onChange={() => role === 'manager' ? toggleRecipient(contact.user_id) : setSelected([contact.user_id])} /><span><strong>{contact.full_name}</strong><small>{contact.role.replace('_', ' ')}</small></span></label>)}</div> : <p className="field-hint">No eligible contacts in your warehouse.</p>}</fieldset>}
-        {role === 'manager' && <label className="checkbox-field"><input type="checkbox" checked={broadcast} onChange={(event) => setBroadcast(event.target.checked)} /> Send to all salespeople and workers</label>}
+        {role === 'manager' && <label className="checkbox-field"><input type="checkbox" checked={broadcast} onChange={(event) => setBroadcast(event.target.checked)} /> Send to all warehouse users</label>}
         <label>Subject<input required maxLength={150} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
         <label>Message<textarea required maxLength={5000} rows={4} value={body} onChange={(event) => setBody(event.target.value)} /></label>
         {error && <div className="auth-error">{error}</div>}

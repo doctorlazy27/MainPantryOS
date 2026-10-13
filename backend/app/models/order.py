@@ -43,3 +43,4 @@ class SalesOrder(Base):
 
     confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reservation_status: Mapped[str] = mapped_column(String(20), nullable=False, default="none")

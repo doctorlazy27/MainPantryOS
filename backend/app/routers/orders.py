@@ -20,8 +20,11 @@ from app.services.activity import log_activity
 from app.services.notification import create_notification, notify_roles
 from app.models.warehouse_request import WarehouseRequest
 from app.models.inventory_movement import InventoryMovement
+from app.models.counter_inventory import CounterInventory
+from app.models.order_inventory_reservation import OrderInventoryReservation
 from app.schemas.warehouse_request import WarehouseRequestCreate
 from app.schemas.warehouse_workflow import OrderPickScanCreate
+from app.services.order_reservations import available_quantity, release_order_reservations
 
 
 router = APIRouter(
@@ -100,28 +103,48 @@ def request_warehouse_stock(
 def approve_warehouse_request(
     request_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("approve_orders")),
+    current_user: dict = Depends(require_permission("process_stock_requests")),
 ):
     item = db.query(WarehouseRequest).filter(WarehouseRequest.request_id == request_id, WarehouseRequest.warehouse_id == current_user.get("warehouse_id"), WarehouseRequest.status == "pending").with_for_update().first()
     if item is None:
         raise HTTPException(status_code=404, detail="Pending stock request not found")
     inventory_rows = db.query(Inventory).join(Batch, Inventory.batch_id == Batch.batch_id).filter(Inventory.product_id == item.product_id, Inventory.warehouse_id == item.warehouse_id, Inventory.quantity > 0, Inventory.putaway_status == "confirmed", Batch.status == "active", Batch.expiry_date >= date.today()).order_by(Batch.expiry_date.asc()).with_for_update().all()
-    if sum(row.quantity for row in inventory_rows) < item.quantity:
+    if sum(available_quantity(db, row) for row in inventory_rows) < item.quantity:
         raise HTTPException(status_code=400, detail="Insufficient unexpired warehouse inventory")
     remaining = item.quantity
+    product = db.query(Product).filter(Product.product_id == item.product_id).first()
     for inventory in inventory_rows:
-        deduction = min(inventory.quantity, remaining)
+        deduction = min(available_quantity(db, inventory), remaining)
         inventory.quantity -= deduction
+        counter_inventory = db.query(CounterInventory).filter(
+            CounterInventory.warehouse_id == item.warehouse_id,
+            CounterInventory.product_id == item.product_id,
+            CounterInventory.batch_id == inventory.batch_id,
+        ).with_for_update().first()
+        if counter_inventory is None:
+            counter_inventory = CounterInventory(
+                warehouse_id=item.warehouse_id,
+                product_id=item.product_id,
+                batch_id=inventory.batch_id,
+                quantity=deduction,
+                minimum_level=product.reorder_level if product else 0,
+                unit_price=product.price if product else 0,
+                last_replenished_at=datetime.utcnow(),
+            )
+            db.add(counter_inventory)
+        else:
+            counter_inventory.quantity += deduction
+            counter_inventory.last_replenished_at = datetime.utcnow()
         db.add(InventoryMovement(
             inventory_id=inventory.inventory_id,
             product_id=inventory.product_id,
             batch_id=inventory.batch_id,
             warehouse_id=inventory.warehouse_id,
-            movement_type="ISSUED",
+            movement_type="TRANSFER_TO_COUNTER",
             quantity=deduction,
             actor_id=current_user["user_id"],
             actor_name=current_user["username"],
-            reason=f"Warehouse request #{item.request_id} approved using FEFO.",
+            reason=f"Warehouse request #{item.request_id} transferred to counter using FEFO.",
         ))
         remaining -= deduction
         if remaining == 0:
@@ -129,7 +152,7 @@ def approve_warehouse_request(
     item.status = "approved"
     item.approved_by = current_user["user_id"]
     item.approved_at = datetime.utcnow()
-    create_notification(db, item.requested_by, "Stock request approved", f"Request #{item.request_id} was approved and inventory was issued.", "warehouse_stock_approved")
+    create_notification(db, item.requested_by, "Stock request fulfilled", f"Request #{item.request_id} was transferred to counter inventory.", "warehouse_stock_approved")
     db.commit()
     return {"message": "Stock request approved", "request_id": request_id, "status": item.status}
 
@@ -138,7 +161,7 @@ def approve_warehouse_request(
 def reject_warehouse_request(
     request_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("approve_orders")),
+    current_user: dict = Depends(require_permission("process_stock_requests")),
 ):
     item = db.query(WarehouseRequest).filter(WarehouseRequest.request_id == request_id, WarehouseRequest.warehouse_id == current_user.get("warehouse_id"), WarehouseRequest.status == "pending").with_for_update().first()
     if item is None:
@@ -186,6 +209,7 @@ def list_orders(
                 "customer_id": order.customer_id,
                 "created_by": order.created_by,
                 "status": order.status,
+                "reservation_status": order.reservation_status,
                 "created_at": order.created_at,
                 "items": items_by_order.get(order.order_id, []),
                 "pick_progress": picks_by_order.get(order.order_id, {}),
@@ -294,7 +318,7 @@ def approve_order(
     requested_quantities = {}
     for item in db.query(SalesOrderItem).filter(SalesOrderItem.order_id == order_id).all():
         requested_quantities[item.product_id] = requested_quantities.get(item.product_id, 0) + item.quantity
-    for product_id, requested_quantity in requested_quantities.items():
+    for product_id, requested_quantity in sorted(requested_quantities.items()):
         available = db.query(Inventory).join(Batch, Inventory.batch_id == Batch.batch_id).filter(
             Inventory.product_id == product_id,
             Inventory.warehouse_id == current_user.get("warehouse_id"),
@@ -303,10 +327,26 @@ def approve_order(
             Batch.status == "active",
             Batch.expiry_date >= date.today(),
         ).with_for_update().all()
-        if sum(row.quantity for row in available) < requested_quantity:
+        remaining = requested_quantity
+        for row in available:
+            reserved = min(available_quantity(db, row), remaining)
+            if reserved:
+                db.add(OrderInventoryReservation(
+                    order_id=order.order_id,
+                    inventory_id=row.inventory_id,
+                    product_id=row.product_id,
+                    batch_id=row.batch_id,
+                    warehouse_id=row.warehouse_id,
+                    quantity=reserved,
+                ))
+                remaining -= reserved
+            if remaining == 0:
+                break
+        if remaining:
             raise HTTPException(status_code=400, detail=f"Insufficient unexpired inventory for product {product_id}")
 
     order.status = OrderStatus.APPROVED.value
+    order.reservation_status = "reserved"
     create_notification(
         db=db,
         user_id=order.created_by,
@@ -392,6 +432,32 @@ def reject_order(
     }
 
 
+@router.patch("/{order_id}/cancel")
+def cancel_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_permission("approve_sales_orders")),
+):
+    order = db.query(SalesOrder).filter(
+        SalesOrder.order_id == order_id,
+        SalesOrder.warehouse_id == current_user.get("warehouse_id"),
+    ).with_for_update().first()
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status not in {OrderStatus.PENDING.value, OrderStatus.APPROVED.value}:
+        raise HTTPException(status_code=400, detail="Only pending or approved orders can be cancelled")
+    release_order_reservations(db, order.order_id)
+    db.query(OrderPickScan).filter(OrderPickScan.order_id == order.order_id).update(
+        {OrderPickScan.is_valid: False}, synchronize_session=False
+    )
+    order.status = OrderStatus.CANCELLED.value
+    order.reservation_status = "released"
+    create_notification(db, order.created_by, "Order cancelled", f"Sales order #{order.order_id} was cancelled.", "order_cancelled")
+    log_activity(db, current_user["user_id"], current_user["username"], "cancel_order", f"Cancelled sales order #{order.order_id} and released its inventory reservations.")
+    db.commit()
+    return {"message": "Order cancelled and reservations released", "order_id": order_id, "status": order.status}
+
+
 @router.get("/{order_id}")
 def get_order(
     order_id: int,
@@ -421,6 +487,7 @@ def get_order(
         "created_by": order.created_by,
         "warehouse_id": order.warehouse_id,
         "status": order.status,
+        "reservation_status": order.reservation_status,
         "created_at": order.created_at,
         "items": [
             {
@@ -476,7 +543,11 @@ def scan_order_pick(
         Batch, Inventory.batch_id == Batch.batch_id
     ).join(
         BoxedUnit, BoxedUnit.inventory_id == Inventory.inventory_id
+    ).join(
+        OrderInventoryReservation, OrderInventoryReservation.inventory_id == Inventory.inventory_id
     ).filter(
+        OrderInventoryReservation.order_id == order_id,
+        OrderInventoryReservation.status == "reserved",
         Inventory.warehouse_id == order.warehouse_id,
         Inventory.putaway_status == "confirmed",
         Inventory.quantity > 0,
@@ -487,7 +558,11 @@ def scan_order_pick(
     if match is None:
         match = db.query(Inventory, Batch).join(
             Batch, Inventory.batch_id == Batch.batch_id
+        ).join(
+            OrderInventoryReservation, OrderInventoryReservation.inventory_id == Inventory.inventory_id
         ).filter(
+            OrderInventoryReservation.order_id == order_id,
+            OrderInventoryReservation.status == "reserved",
             Inventory.warehouse_id == order.warehouse_id,
             Inventory.putaway_status == "confirmed",
             Inventory.quantity > 0,
@@ -519,7 +594,11 @@ def scan_order_pick(
     if already_picked + scan.quantity > requested_quantity:
         raise HTTPException(status_code=400, detail="Scan exceeds the quantity requested for this product")
 
-    candidates = db.query(Inventory, Batch).join(Batch, Inventory.batch_id == Batch.batch_id).filter(
+    candidates = db.query(Inventory, Batch, OrderInventoryReservation).join(Batch, Inventory.batch_id == Batch.batch_id).join(
+        OrderInventoryReservation, OrderInventoryReservation.inventory_id == Inventory.inventory_id
+    ).filter(
+        OrderInventoryReservation.order_id == order_id,
+        OrderInventoryReservation.status == "reserved",
         Inventory.product_id == inventory.product_id,
         Inventory.warehouse_id == order.warehouse_id,
         Inventory.quantity > 0,
@@ -528,15 +607,13 @@ def scan_order_pick(
         Batch.expiry_date >= date.today(),
     ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().all()
     expected_inventory = None
-    for candidate, _candidate_batch in candidates:
-        reserved = db.query(func.coalesce(func.sum(OrderPickScan.quantity), 0)).join(
-            SalesOrder, OrderPickScan.order_id == SalesOrder.order_id
-        ).filter(
+    for candidate, _candidate_batch, reservation in candidates:
+        already_picked_from_inventory = db.query(func.coalesce(func.sum(OrderPickScan.quantity), 0)).filter(
+            OrderPickScan.order_id == order_id,
             OrderPickScan.inventory_id == candidate.inventory_id,
             OrderPickScan.is_valid == True,
-            SalesOrder.status == OrderStatus.APPROVED.value,
         ).scalar()
-        if candidate.quantity - reserved > 0:
+        if reservation.quantity - already_picked_from_inventory > 0:
             expected_inventory = candidate
             break
     if expected_inventory is None or expected_inventory.inventory_id != inventory.inventory_id:
@@ -561,6 +638,7 @@ def scan_order_pick(
         boxed_unit_id=boxed_unit.boxed_unit_id if boxed_unit else None,
         scanned_code=scan.scanned_code,
         quantity=scan.quantity,
+        actor_name=current_user.get("username"),
         actor_id=current_user["user_id"],
     ))
     db.commit()
@@ -601,6 +679,9 @@ def fulfill_order(
             detail="Only approved orders can be fulfilled"
         )
 
+    if order.reservation_status != "reserved":
+        raise HTTPException(status_code=409, detail="Order stock is not fully reserved. Cancel or replace this order before dispatch.")
+
     items = db.query(SalesOrderItem).filter(
         SalesOrderItem.order_id == order_id
     ).all()
@@ -617,13 +698,27 @@ def fulfill_order(
     picked_by_product = {
         product_id: int(quantity)
         for product_id, quantity in db.query(OrderPickScan.product_id, func.sum(OrderPickScan.quantity)).filter(
-            OrderPickScan.order_id == order_id
+            OrderPickScan.order_id == order_id,
+            OrderPickScan.is_valid == True,
+            OrderPickScan.is_valid == True,
         ).group_by(OrderPickScan.product_id).all()
     }
     if any(picked_by_product.get(product_id, 0) < quantity for product_id, quantity in requested_by_product.items()):
         raise HTTPException(status_code=400, detail="Scan and verify every item before dispatch")
 
     pick_scans = db.query(OrderPickScan).filter(OrderPickScan.order_id == order_id, OrderPickScan.is_valid == True).with_for_update().all()
+    reservations = db.query(OrderInventoryReservation).filter(
+        OrderInventoryReservation.order_id == order_id,
+        OrderInventoryReservation.status == "reserved",
+    ).with_for_update().all()
+    reserved_by_inventory = {item.inventory_id: item.quantity for item in reservations}
+    picked_by_inventory = {}
+    for pick in pick_scans:
+        picked_by_inventory[pick.inventory_id] = picked_by_inventory.get(pick.inventory_id, 0) + pick.quantity
+    if any(picked > reserved_by_inventory.get(inventory_id, 0) for inventory_id, picked in picked_by_inventory.items()):
+        raise HTTPException(status_code=409, detail="Picked quantities exceed this order's inventory reservations")
+    if any(picked_by_inventory.get(item.inventory_id, 0) != item.quantity for item in reservations):
+        raise HTTPException(status_code=409, detail="Reserved stock was not fully picked; cancel or replace the order")
     for pick in pick_scans:
         inventory = db.query(Inventory).filter(Inventory.inventory_id == pick.inventory_id).with_for_update().first()
         batch = db.query(Batch).filter(Batch.batch_id == pick.batch_id).with_for_update().first()
@@ -647,6 +742,9 @@ def fulfill_order(
             actor_name=current_user["username"],
             reason=f"Sales order #{order.order_id} dispatched after verified FEFO pick.",
         ))
+
+    for reservation in reservations:
+        reservation.status = "consumed"
 
     order.status = OrderStatus.FULFILLED.value
     create_notification(

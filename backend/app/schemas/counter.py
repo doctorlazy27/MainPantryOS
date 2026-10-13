@@ -12,4 +12,5 @@ class CheckoutItem(BaseModel):
 
 
 class CheckoutCreate(BaseModel):
+    request_key: str | None = Field(default=None, min_length=1, max_length=100)
     items: list[CheckoutItem] = Field(min_length=1)

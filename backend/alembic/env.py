@@ -15,6 +15,7 @@ from app.models.inventory_recommendation import InventoryRecommendation
 from app.models.counter_inventory import CounterInventory
 from app.models.counter_allocation import CounterAllocation
 from app.models.counter_sale import CounterSale, CounterSaleItem
+from app.models.order_inventory_reservation import OrderInventoryReservation
 
 config = context.config
 load_dotenv()

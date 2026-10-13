@@ -178,7 +178,7 @@ Paste this, replacing every placeholder:
 ```env
 DATABASE_URL=postgresql+psycopg://pantryadmin:YOUR_RDS_PASSWORD@YOUR_RDS_ENDPOINT:5432/warehouse_db
 JWT_SECRET_KEY=YOUR_LONG_RANDOM_JWT_SECRET
-CORS_ORIGINS=http://YOUR_ELASTIC_IP
+CORS_ORIGINS=http://YOUR_ELASTIC_IP,https://YOUR_FRONTEND_DOMAIN,https://localhost,http://localhost
 ENABLE_LOCAL_EXPIRY_LOOP=true
 ENABLE_LOCAL_INVENTORY_AI_LOOP=true
 INTERNAL_JOB_SECRET=YOUR_LONG_RANDOM_JOB_SECRET
@@ -187,6 +187,8 @@ AI_API_KEY=YOUR_FREE_TIER_PROVIDER_KEY
 AI_MODEL=YOUR_FREE_CHAT_MODEL_ID
 AWS_REGION=ap-south-1
 ```
+
+`CORS_ORIGINS` is a comma-separated list of exact browser origins, including scheme and port when present. Keep the deployed frontend origin and `https://localhost` for the Capacitor Android WebView. Replace `YOUR_FRONTEND_DOMAIN` with the origin where the web app is actually served; do not use a wildcard.
 
 Generate secrets on EC2 with:
 

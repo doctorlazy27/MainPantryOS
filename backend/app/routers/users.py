@@ -20,6 +20,8 @@ from app.models.inventory_addition_request import InventoryAdditionRequest
 from app.models.warehouse_request import WarehouseRequest
 from app.models.inventory_movement import InventoryMovement
 from app.models.inventory_recommendation import InventoryRecommendation
+from app.models.order_pick_scan import OrderPickScan
+from app.models.temperature_log import TemperatureLog
 from app.schemas.user import UserDelete
 
 
@@ -106,6 +108,15 @@ def remove_user(
     )
     db.query(InventoryAdditionRequest).filter(InventoryAdditionRequest.requested_by == user_id).update(
         {InventoryAdditionRequest.requested_by: history_owner_id}, synchronize_session=False
+    )
+    db.query(OrderPickScan).filter(OrderPickScan.actor_id == user_id).update(
+        {OrderPickScan.actor_id: history_owner_id, OrderPickScan.actor_name: user.full_name}, synchronize_session=False
+    )
+    db.query(TemperatureLog).filter(TemperatureLog.recorded_by == user_id).update(
+        {TemperatureLog.recorded_by: None}, synchronize_session=False
+    )
+    db.query(InventoryAdditionRequest).filter(InventoryAdditionRequest.reviewed_by == user_id).update(
+        {InventoryAdditionRequest.reviewed_by: None}, synchronize_session=False
     )
     db.query(WarehouseRequest).filter(WarehouseRequest.requested_by == user_id).update(
         {WarehouseRequest.requested_by: history_owner_id}, synchronize_session=False

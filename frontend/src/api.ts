@@ -52,7 +52,7 @@ export type CounterInventory = { counter_inventory_id: number; product_id: numbe
 export type CounterAllocation = { allocation_id: number; product_id: number; product_name: string; quantity: number; status: string; created_at: string }
 export type CounterSale = { sale_id: number; bill_number: string; total_amount: number; worker_id: number; created_at: string }
 export type PurchaseOrder = { purchase_order_id: number; supplier_name: string; warehouse_id: number | null; status: string; created_at: string; items: Array<{ product_id: number; product_name: string; quantity: number }> }
-export type SalesOrder = { order_id: number; customer_id: number; created_by: number; status: string; created_at: string; items: Array<{ product_id: number; product_name: string; quantity: number }>; pick_progress?: Record<number, number> }
+export type SalesOrder = { order_id: number; customer_id: number; created_by: number; status: string; reservation_status?: string; created_at: string; items: Array<{ product_id: number; product_name: string; quantity: number }>; pick_progress?: Record<number, number> }
 export type PutawayTask = { inventory_id: number; product_name: string; batch_number: string; quantity: number; storage_zone: 'AMBIENT' | 'CHILLED' | 'FROZEN'; expiry_date: string }
 export type TemperatureLog = { temperature_log_id: number; batch_id: number; inventory_id: number | null; stage: string; storage_zone: string; temperature_c: number; minimum_c: number; maximum_c: number | null; within_range: boolean; recorded_at: string }
 export type StockTransfer = { transfer_id: number; product_id: number; product_name: string; batch_id: number; batch_number: string; source_warehouse_id: number; source_warehouse_name: string; destination_warehouse_id: number; destination_warehouse_name: string; quantity: number; status: string; created_at: string }
@@ -131,7 +131,11 @@ export async function approveRegistration(requestId: number) { return api<Record
 export async function rejectRegistration(requestId: number) { return api<Record<string, unknown>>(`/auth/registration-requests/${requestId}/reject`, { method: 'PATCH' }) }
 
 export function logout() {
+  const token = localStorage.getItem('pantryos_token')
   localStorage.removeItem('pantryos_token')
+  if (token) {
+    void fetch(`${API_URL}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => undefined)
+  }
 }
 
 export async function getProducts() { return api<{ products: Product[] }>('/products/') }
@@ -162,7 +166,8 @@ export async function getCounterInventory() { return api<{ inventory: CounterInv
 export async function getCounterAllocations() { return api<{ allocations: CounterAllocation[] }>('/counter/allocations') }
 export async function requestCounterAllocation(input: { product_id: number; quantity: number }) { return api<{ allocation_id: number; status: string }>('/counter/allocations', { method: 'POST', body: JSON.stringify(input) }) }
 export async function approveCounterAllocation(id: number) { return api<Record<string, unknown>>(`/counter/allocations/${id}/approve`, { method: 'PATCH' }) }
-export async function checkoutCounter(input: { items: Array<{ scanned_code: string; quantity: number }> }) { return api<{ sale_id: number; bill_number: string; total_amount: number; created_at: string }>('/counter/checkout', { method: 'POST', body: JSON.stringify(input) }) }
+export async function rejectCounterAllocation(id: number) { return api<Record<string, unknown>>(`/counter/allocations/${id}/reject`, { method: 'PATCH' }) }
+export async function checkoutCounter(input: { request_key: string; items: Array<{ scanned_code: string; quantity: number }> }) { return api<{ sale_id: number; bill_number: string; total_amount: number; created_at: string; product_name: string; remaining_quantity: number; duplicate: boolean }>('/counter/checkout', { method: 'POST', body: JSON.stringify(input) }) }
 export async function lookupCounterBarcode(barcode: string) { return api<{ product_name: string; unit_price: number; available_quantity: number; expiry_date: string; batch_number: string }>(`/counter/lookup?barcode=${encodeURIComponent(barcode)}`) }
 export async function getCounterSales() { return api<{ sales: CounterSale[] }>('/counter/sales') }
 export async function getWarehouseCopilot(question: string) { return api<{ answer: string; priorities: string[]; ai_powered: boolean }>(`/counter/copilot?question=${encodeURIComponent(question)}`) }
@@ -182,13 +187,14 @@ export async function createProduct(input: ProductInput) { return api<Product>('
 export async function createCustomer(input: CustomerInput) { return api<Customer>('/customers/', { method: 'POST', body: JSON.stringify(input) }) }
 export async function createSupplier(input: SupplierInput) { return api<Supplier>('/suppliers/', { method: 'POST', body: JSON.stringify(input) }) }
 export async function createOrder(input: { customer_id?: number; customer_name?: string; items: Array<{ product_id: number; quantity: number }> }) { return api<Record<string, unknown>>('/orders/', { method: 'POST', body: JSON.stringify(input) }) }
-export async function createSale(input: { customer_name: string; items: Array<{ product_id: number; quantity: number }> }) { return api<Record<string, unknown>>('/orders/sales', { method: 'POST', body: JSON.stringify(input) }) }
 export async function createPurchaseOrder(input: { supplier_id?: number; supplier_name?: string; items: Array<{ product_id?: number; product_name?: string; quantity: number }> }) { return api<Record<string, unknown>>('/purchase-orders/', { method: 'POST', body: JSON.stringify(input) }) }
+export async function cancelPurchaseOrder(purchaseOrderId: number) { return api<{ purchase_order_id: number; status: string }>(`/purchase-orders/${purchaseOrderId}/cancel`, { method: 'PATCH' }) }
 export async function getPurchaseOrders() { return api<{ purchase_orders: PurchaseOrder[] }>('/purchase-orders/') }
 export async function createTransfer(input: { product_id: number; batch_id: number; source_warehouse_id: number; destination_warehouse_id: number; quantity: number }) { return api<Record<string, unknown>>('/stock-transfers/', { method: 'POST', body: JSON.stringify(input) }) }
 export async function getTransfers() { return api<{ transfers: StockTransfer[] }>('/stock-transfers/') }
 export async function approveOrder(orderId: number) { return api<Record<string, unknown>>(`/orders/${orderId}/approve`, { method: 'PATCH' }) }
 export async function rejectOrder(orderId: number) { return api<Record<string, unknown>>(`/orders/${orderId}/reject`, { method: 'PATCH' }) }
+export async function cancelOrder(orderId: number) { return api<Record<string, unknown>>(`/orders/${orderId}/cancel`, { method: 'PATCH' }) }
 export async function fulfillOrder(orderId: number) { return api<Record<string, unknown>>(`/orders/${orderId}/fulfill`, { method: 'PATCH' }) }
 export async function confirmOrderReceipt(orderId: number) { return api<Record<string, unknown>>(`/orders/${orderId}/confirm-receipt`, { method: 'PATCH' }) }
 export async function getInventoryAdditionRequests() { return api<{ requests: Array<{ request_id: number; product_id: number; product_name: string; quantity: number; boxed_units: number; batch_number?: string; status: string; requested_by: number; created_at: string }> }>('/inventory/addition-requests') }

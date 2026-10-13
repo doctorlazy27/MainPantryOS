@@ -18,6 +18,7 @@ class OrderPickScan(Base):
     boxed_unit_id: Mapped[int | None] = mapped_column(ForeignKey("boxed_units.boxed_unit_id"), nullable=True)
     scanned_code: Mapped[str] = mapped_column(String(120), nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     actor_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

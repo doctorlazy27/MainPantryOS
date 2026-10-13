@@ -19,6 +19,7 @@ from app.models.order_pick_scan import OrderPickScan
 from app.models.counter_inventory import CounterInventory
 from app.models.order import SalesOrder
 from app.models.order_item import SalesOrderItem
+from app.models.order_inventory_reservation import OrderInventoryReservation
 from app.schemas.inventory_addition_request import InventoryAdditionRequestCreate
 from app.schemas.inventory_addition_approval import InventoryAdditionApproval
 from app.schemas.inventory_scan import InventoryScan
@@ -29,6 +30,7 @@ from app.services.boxed_units import create_boxed_units
 from app.services.expiry import process_expiry
 from app.services.inventory_guard import require_available_batch
 from app.services.cold_chain import temperature_is_safe, temperature_range
+from app.services.order_reservations import available_quantity, release_batch_reservations
 
 
 router = APIRouter(
@@ -122,6 +124,7 @@ def record_storage_temperature(
         db.query(Inventory).filter(Inventory.batch_id == batch_id, Inventory.warehouse_id == inventory.warehouse_id).update({Inventory.putaway_status: "hold", Inventory.location_code: "QUARANTINE"}, synchronize_session="fetch")
         pending_orders = db.query(SalesOrder.order_id).filter(SalesOrder.status == "approved", SalesOrder.warehouse_id == inventory.warehouse_id).subquery()
         db.query(OrderPickScan).filter(OrderPickScan.batch_id == batch_id, OrderPickScan.order_id.in_(pending_orders)).update({OrderPickScan.is_valid: False}, synchronize_session=False)
+        release_batch_reservations(db, batch_id, inventory.warehouse_id)
         db.query(CounterInventory).filter(CounterInventory.batch_id == batch_id, CounterInventory.warehouse_id == inventory.warehouse_id).update({CounterInventory.quantity: 0}, synchronize_session=False)
         notify_roles(db, {"manager"}, "Cold-chain exception", f"Batch {batch.batch_number} measured {reading.temperature_c} C outside the {inventory.storage_zone.lower()} range and was quarantined.", "cold_chain_exception", inventory.warehouse_id)
     log_activity(db, current_user["user_id"], current_user["username"], "TEMPERATURE_RECORDED", f"Recorded {reading.temperature_c} C for batch {batch.batch_number}; within range: {within_range}.")
@@ -254,6 +257,7 @@ def update_batch_status(
     if update.status != "active":
         pending_orders = db.query(SalesOrder.order_id).filter(SalesOrder.status == "approved", SalesOrder.warehouse_id == current_user.get("warehouse_id")).subquery()
         db.query(OrderPickScan).filter(OrderPickScan.batch_id == batch_id, OrderPickScan.order_id.in_(pending_orders)).update({OrderPickScan.is_valid: False}, synchronize_session=False)
+        release_batch_reservations(db, batch_id, current_user.get("warehouse_id"))
         db.query(CounterInventory).filter(CounterInventory.batch_id == batch_id, CounterInventory.warehouse_id == current_user.get("warehouse_id")).update({CounterInventory.quantity: 0}, synchronize_session=False)
     log_activity(db, current_user["user_id"], current_user["username"], "BATCH_STATUS_UPDATED", f"Batch {batch.batch_number} marked {update.status}: {update.reason}")
     db.commit()
@@ -498,8 +502,9 @@ def reduce_inventory_by_scan(
     require_available_batch(db, inventory.batch_id)
     if boxed_unit.remaining_units < scan.quantity:
         raise HTTPException(status_code=400, detail=f"Only {boxed_unit.remaining_units} units remain for this barcode")
-    if inventory.quantity < scan.quantity:
-        raise HTTPException(status_code=400, detail=f"Only {inventory.quantity} units remain in stock")
+    stock_available = available_quantity(db, inventory)
+    if stock_available < scan.quantity:
+        raise HTTPException(status_code=400, detail=f"Only {stock_available} unreserved units remain in stock")
 
     boxed_unit.remaining_units -= scan.quantity
     inventory.quantity -= scan.quantity

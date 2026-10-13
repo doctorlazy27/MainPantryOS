@@ -15,6 +15,7 @@ from app.auth.dependencies import require_permission
 from app.models.inventory import Inventory
 from app.services.activity import log_activity
 from app.services.inventory_guard import require_available_batch
+from app.services.order_reservations import available_quantity
 
 
 router = APIRouter(
@@ -120,7 +121,7 @@ def approve_stock_transfer(
     if source_inventory.putaway_status != "confirmed":
         raise HTTPException(status_code=409, detail="Source stock must be put away before transfer")
 
-    if source_inventory.quantity < transfer.quantity:
+    if available_quantity(db, source_inventory) < transfer.quantity:
         raise HTTPException(
             status_code=400,
             detail="Insufficient stock for transfer"

@@ -67,6 +67,7 @@ def get_current_user(
             "account_username": user.username,
             "role": role,
             "warehouse_id": user.warehouse_id,
+            "session_id": session_id,
         }
 
     except (JWTError, ValueError):

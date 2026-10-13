@@ -41,6 +41,19 @@ def get_roles():
         "roles": [UserRole.MANAGER.value, UserRole.WAREHOUSE_WORKER.value]
     }
 
+
+@router.post("/logout")
+def logout_user(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    db.query(AuthSession).filter(
+        AuthSession.session_id == current_user["session_id"],
+        AuthSession.user_id == current_user["user_id"],
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"message": "Session revoked"}
+
 @router.get("/warehouses")
 def get_signup_warehouses(db: Session = Depends(get_db)):
     return {"warehouses": db.query(Warehouse).order_by(Warehouse.name.asc()).all()}
@@ -233,6 +246,7 @@ def confirm_password_reset(request: PasswordResetConfirm, db: Session = Depends(
     if user is None:
         raise HTTPException(status_code=400, detail="Account not found")
     user.password_hash = hash_password(request.new_password)
+    db.query(AuthSession).filter(AuthSession.user_id == user.user_id).delete(synchronize_session=False)
     db.commit()
     return {"message": "Password updated. You can now sign in."}
 
@@ -277,6 +291,14 @@ def approve_registration_request(
 
     if request is None:
         raise HTTPException(status_code=404, detail="Pending registration request not found")
+
+    try:
+        UserRole(request.role)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="This signup requested a retired role. Reject it and ask the applicant to submit a new request with a supported role.",
+        ) from error
 
     if db.query(User).filter(User.username == request.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")

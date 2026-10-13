@@ -7,7 +7,7 @@ export default function WorkerOrderPanel({ onToast }: Props) {
   const [orders, setOrders] = useState<Awaited<ReturnType<typeof getOrders>>['orders']>([])
   const [codes, setCodes] = useState<Record<number, string>>({})
   const [quantities, setQuantities] = useState<Record<number, string>>({})
-  const load = async () => { try { setOrders((await getOrders()).orders.filter((order) => order.status === 'approved')) } catch (error) { onToast(error instanceof Error ? error.message : 'Could not load warehouse orders') } }
+  const load = async () => { try { setOrders((await getOrders()).orders.filter((order) => order.status === 'approved' && order.reservation_status !== 'short')) } catch (error) { onToast(error instanceof Error ? error.message : 'Could not load warehouse orders') } }
   useEffect(() => { void load() }, [])
   async function scan(event: FormEvent, orderId: number) {
     event.preventDefault()

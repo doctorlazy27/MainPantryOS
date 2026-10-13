@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_permission
@@ -20,6 +21,8 @@ from app.models.warehouse import Warehouse
 from app.models.supplier import Supplier
 from app.schemas.receiving import ReceivePurchaseOrder
 from app.services.ocr_provider import TextractNotConfigured, textract_provider_from_environment
+from app.services.activity import log_activity
+from app.services.notification import create_notification
 
 
 router = APIRouter(
@@ -139,7 +142,16 @@ def receive_purchase_order(
     if received != ordered:
         raise HTTPException(status_code=400, detail="Received quantities must match the purchase order")
 
-    for item, product in resolved_items:
+    batch_numbers = [item.batch_number.strip() for item, _product in resolved_items]
+    if any(not batch_number for batch_number in batch_numbers):
+        raise HTTPException(status_code=400, detail="Every received line needs a batch number")
+    if len({batch_number.casefold() for batch_number in batch_numbers}) != len(batch_numbers):
+        raise HTTPException(status_code=409, detail="Each received lot needs a unique batch number")
+    existing_batch = db.query(Batch.batch_number).filter(Batch.batch_number.in_(batch_numbers)).first()
+    if existing_batch:
+        raise HTTPException(status_code=409, detail=f"Batch number {existing_batch[0]} already exists")
+
+    for (item, product), batch_number in zip(resolved_items, batch_numbers):
         if item.expiry_date <= item.manufacturing_date:
             raise HTTPException(status_code=400, detail="Expiry date must be after manufacturing date")
         if item.expiry_date <= date.today():
@@ -149,14 +161,18 @@ def receive_purchase_order(
         passed_qc = temperature_is_safe(item.storage_zone, item.temperature_c)
         batch = Batch(
             product_id=product.product_id,
-            batch_number=item.batch_number,
+            batch_number=batch_number,
             manufacturing_date=item.manufacturing_date,
             expiry_date=item.expiry_date,
             status="active" if passed_qc else "quarantined",
         )
 
         db.add(batch)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError as error:
+            db.rollback()
+            raise HTTPException(status_code=409, detail=f"Batch number {batch_number} already exists") from error
 
         inventory = Inventory(
             product_id=product.product_id,
@@ -280,3 +296,25 @@ def create_purchase_order(
         "created_by": current_user["username"],
         "status": new_order.status
     }
+
+
+@router.patch("/{purchase_order_id}/cancel")
+def cancel_purchase_order(
+    purchase_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_permission("create_purchase_orders")),
+):
+    purchase_order = db.query(PurchaseOrder).filter(
+        PurchaseOrder.purchase_order_id == purchase_order_id,
+        PurchaseOrder.warehouse_id == current_user.get("warehouse_id"),
+    ).with_for_update().first()
+    if purchase_order is None:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    if purchase_order.status != "pending":
+        raise HTTPException(status_code=409, detail="Only pending purchase orders can be cancelled")
+    purchase_order.status = "cancelled"
+    log_activity(db, current_user["user_id"], current_user["username"], "CANCEL_PURCHASE_ORDER", f"Cancelled purchase order #{purchase_order_id}.")
+    if purchase_order.created_by != current_user["user_id"]:
+        create_notification(db, purchase_order.created_by, "Purchase order cancelled", f"Purchase order #{purchase_order_id} was cancelled.", "purchase_order_cancelled")
+    db.commit()
+    return {"purchase_order_id": purchase_order_id, "status": purchase_order.status}

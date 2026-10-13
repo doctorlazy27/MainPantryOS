@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.counter_inventory import CounterInventory
 from app.services.activity import log_activity
 from app.services.notification import create_notification_once
+from app.services.order_reservations import release_batch_reservations
 
 
 def process_expiry(db: Session, today: date | None = None) -> dict[str, int]:
@@ -36,6 +37,7 @@ def process_expiry(db: Session, today: date | None = None) -> dict[str, int]:
         inventory.expired_quantity = (inventory.expired_quantity or 0) + quantity
         batch.status = "expired"
         batch.expired_at = batch.expired_at or datetime.utcnow()
+        release_batch_reservations(db, batch.batch_id, inventory.warehouse_id)
         existing_movement = db.query(InventoryMovement).filter(
             InventoryMovement.inventory_id == inventory.inventory_id,
             InventoryMovement.movement_type == "EXPIRED",
