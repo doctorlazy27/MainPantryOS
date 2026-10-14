@@ -376,7 +376,7 @@ def login_user(
             )
         raise HTTPException(
             status_code=401,
-            detail="Invalid username or password"
+            detail="Invalid email or password"
         )
 
     if not verify_password(
@@ -385,7 +385,7 @@ def login_user(
     ):
         raise HTTPException(
             status_code=401,
-            detail="Invalid username or password"
+            detail="Invalid email or password"
         )
 
     session_id = str(uuid4())

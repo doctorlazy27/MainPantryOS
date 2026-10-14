@@ -733,7 +733,7 @@ def get_fefo_stock(
             Inventory.quantity > 0,
             Inventory.putaway_status == "confirmed",
             Batch.status == "active",
-            Batch.expiry_date >= date.today()
+            Batch.expiry_date > date.today()
         )
         .order_by(Batch.expiry_date.asc())
         .all()

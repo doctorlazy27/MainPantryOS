@@ -42,7 +42,7 @@ def _fefo_plan(db: Session, product_id: int, warehouse_id: int, quantity: int, l
         Inventory.quantity > 0,
         Inventory.putaway_status == "confirmed",
         Batch.status == "active",
-        Batch.expiry_date >= date.today(),
+        Batch.expiry_date > date.today(),
     ).order_by(Batch.expiry_date.asc())
     if lock:
         query = query.with_for_update()
@@ -108,7 +108,7 @@ def approve_warehouse_request(
     item = db.query(WarehouseRequest).filter(WarehouseRequest.request_id == request_id, WarehouseRequest.warehouse_id == current_user.get("warehouse_id"), WarehouseRequest.status == "pending").with_for_update().first()
     if item is None:
         raise HTTPException(status_code=404, detail="Pending stock request not found")
-    inventory_rows = db.query(Inventory).join(Batch, Inventory.batch_id == Batch.batch_id).filter(Inventory.product_id == item.product_id, Inventory.warehouse_id == item.warehouse_id, Inventory.quantity > 0, Inventory.putaway_status == "confirmed", Batch.status == "active", Batch.expiry_date >= date.today()).order_by(Batch.expiry_date.asc()).with_for_update().all()
+    inventory_rows = db.query(Inventory).join(Batch, Inventory.batch_id == Batch.batch_id).filter(Inventory.product_id == item.product_id, Inventory.warehouse_id == item.warehouse_id, Inventory.quantity > 0, Inventory.putaway_status == "confirmed", Batch.status == "active", Batch.expiry_date > date.today()).order_by(Batch.expiry_date.asc()).with_for_update().all()
     if sum(available_quantity(db, row) for row in inventory_rows) < item.quantity:
         raise HTTPException(status_code=400, detail="Insufficient unexpired warehouse inventory")
     remaining = item.quantity
@@ -325,7 +325,7 @@ def approve_order(
             Inventory.quantity > 0,
             Inventory.putaway_status == "confirmed",
             Batch.status == "active",
-            Batch.expiry_date >= date.today(),
+            Batch.expiry_date > date.today(),
         ).with_for_update().all()
         remaining = requested_quantity
         for row in available:
@@ -552,7 +552,7 @@ def scan_order_pick(
         Inventory.putaway_status == "confirmed",
         Inventory.quantity > 0,
         Batch.status == "active",
-        Batch.expiry_date >= date.today(),
+        Batch.expiry_date > date.today(),
         (BoxedUnit.scanned_code == scan.scanned_code) | (BoxedUnit.box_code == scan.scanned_code),
     ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().first()
     if match is None:
@@ -567,7 +567,7 @@ def scan_order_pick(
             Inventory.putaway_status == "confirmed",
             Inventory.quantity > 0,
             Batch.status == "active",
-            Batch.expiry_date >= date.today(),
+            Batch.expiry_date > date.today(),
             Batch.batch_number == scan.scanned_code,
         ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().first()
         if match is not None:
@@ -604,7 +604,7 @@ def scan_order_pick(
         Inventory.quantity > 0,
         Inventory.putaway_status == "confirmed",
         Batch.status == "active",
-        Batch.expiry_date >= date.today(),
+        Batch.expiry_date > date.today(),
     ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().all()
     expected_inventory = None
     for candidate, _candidate_batch, reservation in candidates:
@@ -700,7 +700,6 @@ def fulfill_order(
         for product_id, quantity in db.query(OrderPickScan.product_id, func.sum(OrderPickScan.quantity)).filter(
             OrderPickScan.order_id == order_id,
             OrderPickScan.is_valid == True,
-            OrderPickScan.is_valid == True,
         ).group_by(OrderPickScan.product_id).all()
     }
     if any(picked_by_product.get(product_id, 0) < quantity for product_id, quantity in requested_by_product.items()):
@@ -722,7 +721,7 @@ def fulfill_order(
     for pick in pick_scans:
         inventory = db.query(Inventory).filter(Inventory.inventory_id == pick.inventory_id).with_for_update().first()
         batch = db.query(Batch).filter(Batch.batch_id == pick.batch_id).with_for_update().first()
-        if inventory is None or batch is None or inventory.quantity < pick.quantity or inventory.putaway_status != "confirmed" or batch.status != "active" or batch.expiry_date < date.today():
+        if inventory is None or batch is None or inventory.quantity < pick.quantity or inventory.putaway_status != "confirmed" or batch.status != "active" or batch.expiry_date <= date.today():
             raise HTTPException(status_code=409, detail="Picked inventory changed before dispatch")
         inventory.quantity -= pick.quantity
         if pick.boxed_unit_id is not None:

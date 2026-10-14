@@ -1048,6 +1048,28 @@ def test_fefo_plan_skips_expired_batches(db):
     assert _fefo_plan(db, product.product_id, warehouse.warehouse_id, 1) == []
 
 
+def test_batches_expiring_today_are_not_saleable(db):
+    warehouse = Warehouse(name="Expiry-day warehouse", location="Test")
+    product = Product(name="Yogurt", category="Dairy", quantity=0, unit="units", price=2, units_per_box=1)
+    db.add_all([warehouse, product])
+    db.flush()
+    batch = Batch(
+        product_id=product.product_id,
+        batch_number="EXPIRES-TODAY",
+        manufacturing_date=date.today() - timedelta(days=1),
+        expiry_date=date.today(),
+    )
+    db.add(batch)
+    db.flush()
+    db.add(Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=batch.batch_id, quantity=5))
+    db.commit()
+
+    with pytest.raises(HTTPException) as error:
+        require_available_batch(db, batch.batch_id)
+    assert error.value.status_code == 400
+    assert _fefo_plan(db, product.product_id, warehouse.warehouse_id, 1) == []
+
+
 def test_fefo_plan_allocates_across_valid_batches(db):
     warehouse = Warehouse(name="FEFO warehouse", location="Test")
     product = Product(name="Rice", category="Boxed items", quantity=0, unit="kg", price=2, units_per_box=1)
