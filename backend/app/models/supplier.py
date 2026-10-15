@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, String
+from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -32,3 +32,5 @@ class Supplier(Base):
         String(250),
         nullable=True
     )
+
+    warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("warehouses.warehouse_id"), nullable=True, index=True)

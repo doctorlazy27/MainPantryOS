@@ -21,6 +21,8 @@ from app.models.warehouse import Warehouse
 from app.models.auth_otp import AuthOtp
 from app.services.email import send_otp_email
 from app.services.notification import notify_roles
+from app.services.throttle import check_throttle, clear_failures, record_failure
+from app.services.serial import name_equals
 
 
 router = APIRouter(
@@ -96,7 +98,7 @@ def _generate_internal_username(db: Session, email: str) -> str:
 @router.post("/signup-otp")
 def request_signup_otp(request: EmailOtpRequest, db: Session = Depends(get_db)):
     email = request.email.strip().lower()
-    if db.query(User).filter(User.email == email).first() or db.query(RegistrationRequest).filter(RegistrationRequest.email == email, RegistrationRequest.status != "rejected").first():
+    if db.query(User).filter(User.email == email).first() or db.query(RegistrationRequest).filter(RegistrationRequest.email == email, RegistrationRequest.status == "pending").first():
         raise HTTPException(status_code=409, detail="An account already uses this email address")
     code = _issue_otp(db, email, "signup")
     response = {"message": "Verification code sent"}
@@ -124,7 +126,7 @@ def register_user(
             detail="Email address already belongs to an active account",
         )
 
-    if existing_request and existing_request.status != "rejected":
+    if existing_request and existing_request.status == "pending":
         raise HTTPException(
             status_code=409,
             detail=f"A registration request for this email is already {existing_request.status}",
@@ -132,7 +134,7 @@ def register_user(
 
     warehouse = db.query(Warehouse).filter(Warehouse.warehouse_id == user.warehouse_id).first() if user.warehouse_id else None
     if warehouse is None and user.warehouse_name:
-        warehouse = db.query(Warehouse).filter(Warehouse.name.ilike(user.warehouse_name.strip())).first()
+        warehouse = db.query(Warehouse).filter(name_equals(Warehouse.name, user.warehouse_name)).first()
     if warehouse is None and user.role == UserRole.MANAGER and user.warehouse_name:
         warehouse = Warehouse(
             name=user.warehouse_name.strip(),
@@ -174,7 +176,7 @@ def register_user(
             )
         raise HTTPException(status_code=400, detail="Selected warehouse does not exist")
 
-    if existing_request and existing_request.status == "rejected":
+    if existing_request and existing_request.status in {"rejected", "approved"}:
         existing_request.full_name = user.full_name
         existing_request.email = email
         existing_request.role = user.role.value
@@ -293,7 +295,8 @@ def approve_registration_request(
         raise HTTPException(status_code=404, detail="Pending registration request not found")
 
     try:
-        UserRole(request.role)
+        if UserRole(request.role) == UserRole.CASHIER:
+            raise HTTPException(status_code=409, detail="Counter accounts are created by a manager, not through signup.")
     except ValueError as error:
         raise HTTPException(
             status_code=409,
@@ -360,6 +363,8 @@ def login_user(
     user: UserLogin,
     db: Session = Depends(get_db)
 ):
+    throttle_key = f"login:{user.email.strip().lower()}"
+    check_throttle(throttle_key)
     existing_user = db.query(User).filter(
         User.email == user.email.strip().lower()
     ).first()
@@ -383,10 +388,12 @@ def login_user(
         user.password,
         existing_user.password_hash
     ):
+        record_failure(throttle_key)
         raise HTTPException(
             status_code=401,
             detail="Invalid email or password"
         )
+    clear_failures(throttle_key)
 
     session_id = str(uuid4())
     db.add(AuthSession(session_id=session_id, user_id=existing_user.user_id))

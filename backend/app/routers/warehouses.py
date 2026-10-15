@@ -33,7 +33,7 @@ def create_warehouse(
 
 @router.get("/")
 def get_warehouses(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_warehouses"))):
-    warehouses = db.query(Warehouse).all()
+    warehouses = db.query(Warehouse).filter(Warehouse.warehouse_id == current_user.get("warehouse_id")).all()
 
     return {
         "warehouses": warehouses

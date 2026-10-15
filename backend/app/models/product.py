@@ -1,4 +1,4 @@
-from sqlalchemy import Float, Integer, String
+from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -6,6 +6,7 @@ from app.database import Base
 
 class Product(Base):
     __tablename__ = "products"
+    __table_args__ = (UniqueConstraint("warehouse_id", "serial_number", name="uq_products_warehouse_serial"),)
 
     product_id: Mapped[int] = mapped_column(
         Integer,
@@ -14,7 +15,8 @@ class Product(Base):
     )
 
     name: Mapped[str] = mapped_column(String(100))
-    serial_number: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("warehouses.warehouse_id"), nullable=True, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     category: Mapped[str] = mapped_column(String(100))
     storage_section: Mapped[str] = mapped_column(String(100), nullable=False, default="General")
     shelf_number: Mapped[str] = mapped_column(String(50), nullable=False, default="Unassigned")

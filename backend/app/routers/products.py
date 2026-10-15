@@ -16,7 +16,7 @@ router = APIRouter(
 
 @router.get("/")
 def get_products(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_inventory"))):
-    products = db.query(Product).all()
+    products = db.query(Product).filter(Product.warehouse_id == current_user.get("warehouse_id")).all()
 
     return {
         "products": products
@@ -24,7 +24,7 @@ def get_products(db: Session = Depends(get_db), current_user: dict = Depends(req
 
 @router.get("/low-stock")
 def get_low_stock_products(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_inventory"))):
-    products = db.query(Product).all()
+    products = db.query(Product).filter(Product.warehouse_id == current_user.get("warehouse_id")).all()
     low_stock = []
 
     for product in products:
@@ -48,7 +48,7 @@ def get_low_stock_products(db: Session = Depends(get_db), current_user: dict = D
 
 @router.get("/{product_id}")
 def get_product(product_id: int, db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_inventory"))):
-    product = db.query(Product).filter(Product.product_id == product_id).first()
+    product = db.query(Product).filter(Product.product_id == product_id, Product.warehouse_id == current_user.get("warehouse_id")).first()
     if product is None:
         return {"message": "Product not found"}
     return product

@@ -81,6 +81,16 @@ from app.services.cold_chain import temperature_is_safe
 from app.services.ocr_provider import normalize_textract_expense
 
 
+from sqlalchemy import event
+
+
+@event.listens_for(Product, "before_insert")
+def _default_test_warehouse(_mapper, _connection, product):
+    # Fixtures predate warehouse-scoped products; the first test warehouse is id 1.
+    if product.warehouse_id is None:
+        product.warehouse_id = 1
+
+
 @pytest.fixture()
 def db():
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -112,7 +122,8 @@ def seed_expiring_inventory(db):
 
 def test_core_workflow_routers_are_registered():
     paths = set(app.openapi()["paths"])
-    assert {"/customers/", "/orders/", "/invoices/", "/stock-transfers/"} <= paths
+    assert {"/customers/", "/orders/", "/invoices/"} <= paths
+    assert "/stock-transfers/" not in paths
 
 
 def test_invoice_report_periods_use_calendar_windows():
@@ -300,7 +311,7 @@ def test_sales_order_completes_role_handoff_loop(db, monkeypatch):
     manager = User(username="workflow-manager", full_name="Manager", role="manager", password_hash="x", warehouse_id=warehouse.warehouse_id)
     worker = User(username="workflow-worker", full_name="Worker", role="warehouse_worker", password_hash="x", warehouse_id=warehouse.warehouse_id)
     product = Product(name="Workflow rice", category="Dry goods", quantity=0, unit="kg", price=2, units_per_box=1)
-    customer = Customer(name="Workflow buyer", phone="000")
+    customer = Customer(name="Workflow buyer", phone="000", warehouse_id=warehouse.warehouse_id)
     db.add_all([manager, worker, product, customer])
     db.flush()
     batch = Batch(product_id=product.product_id, batch_number="FLOW-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=20))
@@ -1142,3 +1153,23 @@ def test_worker_can_delete_own_account_and_email_is_freed(db):
 
     assert db.query(User).filter_by(email="w@example.com").count() == 0
     assert db.query(RegistrationRequest).filter_by(email="w@example.com").count() == 0
+
+
+def test_each_warehouse_only_sees_its_own_products_and_serials(db):
+    from app.routers.products import get_products
+    from app.routers.customers import get_customers
+
+    first = Warehouse(name="North", location="N")
+    second = Warehouse(name="South", location="S")
+    db.add_all([first, second])
+    db.flush()
+    milk_north = Product(name="Milk", warehouse_id=first.warehouse_id, category="Dairy", quantity=0, unit="units", price=1, serial_number="SAME-SERIAL")
+    milk_south = Product(name="Milk", warehouse_id=second.warehouse_id, category="Dairy", quantity=0, unit="units", price=1, serial_number="SAME-SERIAL")
+    db.add_all([milk_north, milk_south, Customer(name="North buyer", phone="1", warehouse_id=first.warehouse_id)])
+    db.commit()
+
+    north = {"user_id": 1, "role": "manager", "warehouse_id": first.warehouse_id}
+    south = {"user_id": 2, "role": "manager", "warehouse_id": second.warehouse_id}
+    assert [p.product_id for p in get_products(db, north)["products"]] == [milk_north.product_id]
+    assert [p.product_id for p in get_products(db, south)["products"]] == [milk_south.product_id]
+    assert get_customers(db, south)["customers"] == []

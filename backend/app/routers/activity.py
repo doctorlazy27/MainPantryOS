@@ -23,10 +23,7 @@ def get_activity(
     logs = (
             db.query(ActivityLog)
             .outerjoin(User, ActivityLog.user_id == User.user_id)
-            .filter(
-                ActivityLog.user_id.is_(None)
-                | (User.warehouse_id == current_user.get("warehouse_id"))
-            )
+            .filter(User.warehouse_id == current_user.get("warehouse_id"))
         .order_by(ActivityLog.created_at.desc())
         .all()
     )

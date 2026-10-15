@@ -1,6 +1,4 @@
-from collections import defaultdict, deque
 from secrets import randbelow, token_urlsafe
-from time import monotonic
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,34 +16,22 @@ from app.models.user import User
 from app.routers.users import remove_user
 from app.schemas.store_order import CashierCreate, CashierLogin
 from app.services.activity import log_activity
+from app.services.throttle import check_throttle, record_failure
 
 router = APIRouter(tags=["Cashiers"])
 
-_FAILURE_WINDOW_SECONDS = 15 * 60
-_MAX_FAILURES = 10
-_failures: dict[str, deque] = defaultdict(deque)
-
 
 def _client_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
-def _check_throttle(key: str) -> None:
-    attempts = _failures[key]
-    cutoff = monotonic() - _FAILURE_WINDOW_SECONDS
-    while attempts and attempts[0] < cutoff:
-        attempts.popleft()
-    if len(attempts) >= _MAX_FAILURES:
-        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
+    return f"cashier:{request.client.host if request.client else 'unknown'}"
 
 
 @router.post("/auth/cashier-login")
 def cashier_login(login: CashierLogin, request: Request, db: Session = Depends(get_db)):
     key = _client_key(request)
-    _check_throttle(key)
+    check_throttle(key)
     cashier = db.query(User).filter(User.username == login.cashier_id, User.role == UserRole.CASHIER.value).first()
     if cashier is None:
-        _failures[key].append(monotonic())
+        record_failure(key)
         raise HTTPException(status_code=401, detail="Invalid counter ID")
     session_id = str(uuid4())
     db.add(AuthSession(session_id=session_id, user_id=cashier.user_id))

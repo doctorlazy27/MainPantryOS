@@ -23,7 +23,8 @@ def create_customer(
         name=customer.name,
         phone=customer.phone,
         email=customer.email,
-        address=customer.address
+        address=customer.address,
+        warehouse_id=current_user.get("warehouse_id"),
     )
 
     db.add(new_customer)
@@ -35,7 +36,7 @@ def create_customer(
 
 @router.get("/")
 def get_customers(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_customers"))):
-    customers = db.query(Customer).all()
+    customers = db.query(Customer).filter(Customer.warehouse_id == current_user.get("warehouse_id")).all()
 
     return {
         "customers": customers

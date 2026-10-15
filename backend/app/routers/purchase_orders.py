@@ -1,4 +1,4 @@
-from datetime import date
+﻿from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +16,7 @@ from app.models.inventory import Inventory
 from app.models.inventory_movement import InventoryMovement
 from app.models.temperature_log import TemperatureLog
 from app.services.boxed_units import create_boxed_units
-from app.services.serial import register_product_serial
+from app.services.serial import name_equals, register_product_serial
 from app.services.cold_chain import temperature_is_safe, temperature_range
 from app.models.warehouse import Warehouse
 from app.models.supplier import Supplier
@@ -121,9 +121,9 @@ def receive_purchase_order(
 
     resolved_items = []
     for item in receiving.items:
-        product = db.query(Product).filter(Product.product_id == item.product_id).first() if item.product_id else None
+        product = db.query(Product).filter(Product.product_id == item.product_id, Product.warehouse_id == current_user.get("warehouse_id")).first() if item.product_id else None
         if product is None and item.product_name:
-            product = db.query(Product).filter(Product.name.ilike(item.product_name.strip())).first()
+            product = db.query(Product).filter(name_equals(Product.name, item.product_name), Product.warehouse_id == current_user.get("warehouse_id")).first()
         if product is None:
             raise HTTPException(status_code=404, detail=f"Product '{item.product_name or item.product_id}' does not exist")
         resolved_items.append((item, product))
@@ -267,11 +267,11 @@ def create_purchase_order(
     db.flush()
 
     for item in purchase_order.items:
-        product = db.query(Product).filter(Product.product_id == item.product_id).first() if item.product_id else None
+        product = db.query(Product).filter(Product.product_id == item.product_id, Product.warehouse_id == current_user.get("warehouse_id")).first() if item.product_id else None
         if product is None and item.product_name:
-            product = db.query(Product).filter(Product.name.ilike(item.product_name.strip())).first()
+            product = db.query(Product).filter(name_equals(Product.name, item.product_name), Product.warehouse_id == current_user.get("warehouse_id")).first()
         if product is None and item.product_name:
-            product = Product(name=item.product_name.strip(), category="General", quantity=0, unit="units", price=0, reorder_level=0)
+            product = Product(name=item.product_name.strip(), warehouse_id=current_user.get("warehouse_id"), category="General", quantity=0, unit="units", price=0, reorder_level=0)
             db.add(product)
             db.flush()
 

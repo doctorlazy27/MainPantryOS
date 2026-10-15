@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Network } from '@capacitor/network'
 import { StatusBar, Style } from '@capacitor/status-bar'
-import { Wifi, WifiOff } from 'lucide-react'
+import { WifiOff } from 'lucide-react'
+import { pingServer } from './api'
 
 // Copies each table header label onto its row cells so stacked mobile cards stay readable.
 export function TableLabels() {
@@ -28,15 +29,23 @@ export function TableLabels() {
 
 export function NativeAppEffects() {
   const [online, setOnline] = useState(true)
-  const [showState, setShowState] = useState(false)
   useEffect(() => {
     void StatusBar.setOverlaysWebView({ overlay: false }).catch(() => undefined)
     void StatusBar.setStyle({ style: Style.Light }).catch(() => undefined)
     let listener: { remove: () => Promise<void> } | undefined
-    void Network.getStatus().then((status) => setOnline(status.connected)).catch(() => undefined)
-    void Network.addListener('networkStatusChange', (status) => { setOnline(status.connected); setShowState(true); window.setTimeout(() => setShowState(false), 2400) }).then((handle) => { listener = handle })
-    return () => { void listener?.remove() }
+    let timer = 0
+    // The plugin can report "disconnected" on emulators, VPNs or captive networks, so the server itself is the source of truth.
+    const verify = async (pluginConnected: boolean) => {
+      window.clearTimeout(timer)
+      if (pluginConnected) { setOnline(true); return }
+      const reachable = await pingServer()
+      setOnline(reachable)
+      if (!reachable) timer = window.setTimeout(() => void Network.getStatus().then((status) => verify(status.connected)).catch(() => verify(false)), 15000)
+    }
+    void Network.getStatus().then((status) => verify(status.connected)).catch(() => undefined)
+    void Network.addListener('networkStatusChange', (status) => void verify(status.connected)).then((handle) => { listener = handle })
+    return () => { window.clearTimeout(timer); void listener?.remove() }
   }, [])
   if (online) return null
-  return <div className={`connection-pill ${showState ? 'visible' : ''} ${online ? 'connected' : 'offline'}`} aria-live="polite">{online ? <Wifi size={14} /> : <WifiOff size={14} />}<span>{online ? 'Connected' : 'Offline'}</span></div>
+  return <div className="connection-pill offline" role="status" aria-live="polite"><WifiOff size={14} /><span>Can't reach the server</span></div>
 }

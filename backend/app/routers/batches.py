@@ -27,7 +27,7 @@ def create_batch(
         raise HTTPException(status_code=400, detail="Expiry date must be after manufacturing date")
     if batch.expiry_date <= date.today():
         raise HTTPException(status_code=400, detail="Cannot create an already expired batch")
-    product = db.query(Product).filter(Product.product_id == batch.product_id).first()
+    product = db.query(Product).filter(Product.product_id == batch.product_id, Product.warehouse_id == current_user.get("warehouse_id")).first()
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     serial = register_product_serial(db, product, batch.serial_number)
@@ -48,7 +48,9 @@ def create_batch(
 
 @router.get("/")
 def get_batches(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_inventory"))):
-    batches = db.query(Batch).all()
+    batches = db.query(Batch).join(Product, Batch.product_id == Product.product_id).filter(
+        Product.warehouse_id == current_user.get("warehouse_id")
+    ).all()
 
     return {
         "batches": batches

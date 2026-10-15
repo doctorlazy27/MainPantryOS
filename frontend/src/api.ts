@@ -37,7 +37,7 @@ export type DashboardData = {
 }
 
 export type Product = { product_id: number; name: string; serial_number?: string | null; category: string; storage_section: string; shelf_number: string; aisle: string; quantity: number; unit: string; price: number; reorder_level: number; units_per_box: number }
-export type InventoryRecord = { inventory_id: number; product_id: number; warehouse_id: number; batch_id: number; quantity: number; serial_number?: string | null; boxed_units: number; units_per_box: number; unit_price: number; box_unit_cost: number; total_box_cost: number; boxed_unit_ids: string[]; storage_zone?: string; location_code?: string; putaway_status?: string; batch_status?: string; batch_number?: string }
+export type InventoryRecord = { inventory_id: number; product_id: number; warehouse_id: number; batch_id: number; quantity: number; serial_number?: string | null; expiry_date?: string | null; boxed_units: number; units_per_box: number; unit_price: number; box_unit_cost: number; total_box_cost: number; boxed_unit_ids: string[]; storage_zone?: string; location_code?: string; putaway_status?: string; batch_status?: string; batch_number?: string }
 export type Warehouse = { warehouse_id: number; name: string; location: string }
 export type Customer = { customer_id: number; name: string; phone: string; email?: string; address?: string }
 export type Supplier = { supplier_id: number; name: string; phone: string; email?: string; address?: string }
@@ -100,6 +100,16 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     pendingRequests = Math.max(0, pendingRequests - 1)
     publishNetworkActivity()
   }
+}
+
+export async function pingServer() {
+  try {
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), 6000)
+    const response = await fetch(`${API_URL}/health`, { cache: 'no-store', signal: controller.signal })
+    window.clearTimeout(timer)
+    return response.ok
+  } catch { return false }
 }
 
 export async function getDashboard() {
@@ -207,7 +217,7 @@ export async function getInventoryRecommendations() { return api<{ recommendatio
 export async function reviewInventoryRecommendation(recommendationId: number, decision: 'approve' | 'reject', supplierId?: number) { return api<{ recommendation_id: number; status: string; purchase_order_id?: number | null }>(`/inventory/recommendations/${recommendationId}/${decision}`, { method: 'PATCH', ...(supplierId ? { body: JSON.stringify({ supplier_id: supplierId }) } : {}) }) }
 export async function createInventoryAdditionRequest(input: { product_name: string; category: string; quantity: number; units_per_box: number; boxed_units: number; unit_price: number; box_unit_cost: number }) { return api<Record<string, unknown>>('/inventory/addition-requests', { method: 'POST', body: JSON.stringify(input) }) }
 export async function approveInventoryAddition(requestId: number) { return api<Record<string, unknown>>(`/inventory/addition-requests/${requestId}/approve`, { method: 'PATCH' }) }
-export async function receiveInventoryAddition(requestId: number, input: { serial_number: string; batch_number: string; manufacturing_date: string; expiry_date: string; storage_zone: 'AMBIENT' | 'CHILLED' | 'FROZEN'; temperature_c: number | string; aisle: string; shelf_number: string }) { return api<Record<string, unknown>>(`/inventory/addition-requests/${requestId}/receive`, { method: 'PATCH', body: JSON.stringify({ ...input, temperature_c: Number(input.temperature_c) }) }) }
+export async function receiveInventoryAddition(requestId: number, input: { serial_number: string; batch_number: string; manufacturing_date: string; expiry_date: string; aisle: string; shelf_number: string }) { return api<Record<string, unknown>>(`/inventory/addition-requests/${requestId}/receive`, { method: 'PATCH', body: JSON.stringify(input) }) }
 export async function rejectInventoryAddition(requestId: number) { return api<Record<string, unknown>>(`/inventory/addition-requests/${requestId}/reject`, { method: 'PATCH' }) }
 export async function receivePurchaseOrder(purchaseOrderId: number, input: { warehouse_id: number; items: Array<{ product_id?: number; product_name?: string; quantity: number; batch_number: string; manufacturing_date: string; expiry_date: string; storage_zone: 'AMBIENT' | 'CHILLED' | 'FROZEN'; temperature_c: number }> }) { return api<{ quarantined_batches?: string[] }>(`/purchase-orders/${purchaseOrderId}/receive`, { method: 'PATCH', body: JSON.stringify(input) }) }
 export async function parseDeliveryDocument(purchaseOrderId: number, document: File) { const form = new FormData(); form.append('document', document); return api<{ purchase_order_id: number; extracted: { vendor?: string; invoice_date?: string; needs_review: boolean; items: Array<{ item_name: string | null; quantity: string | null; lot_number: string | null; expiry_date: string | null }> } }>(`/purchase-orders/${purchaseOrderId}/parse-document`, { method: 'POST', body: form }) }

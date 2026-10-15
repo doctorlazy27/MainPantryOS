@@ -32,8 +32,8 @@ def get_dashboard(
     )
 ):
     process_expiry(db)
-    total_products = db.query(Product).count()
     warehouse_id = current_user.get("warehouse_id")
+    total_products = db.query(Product).filter(Product.warehouse_id == warehouse_id).count()
     total_inventory_records = db.query(Inventory).filter(Inventory.warehouse_id == warehouse_id).count()
 
     pending_sales_orders = db.query(SalesOrder).filter(
@@ -63,7 +63,7 @@ def get_dashboard(
     # Calculate products that are at or below their reorder level.
     low_stock_products = []
 
-    products = db.query(Product).all()
+    products = db.query(Product).filter(Product.warehouse_id == warehouse_id).all()
 
     for product in products:
         inventory_rows = db.query(Inventory).filter(

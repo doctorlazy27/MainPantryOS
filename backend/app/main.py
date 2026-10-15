@@ -150,7 +150,6 @@ app.include_router(suppliers_router)
 app.include_router(purchase_orders_router)
 app.include_router(orders_router)
 app.include_router(invoices_router)
-app.include_router(stock_transfers_router)
 app.include_router(activity_router)
 app.include_router(notifications_router)
 app.include_router(dashboard_router)
@@ -180,14 +179,5 @@ def health_check():
 
     return {"status": "healthy", "database": "connected"}
 
-@app.get("/database-test", include_in_schema=False)
-def database_test():
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT 1"))
-
-        return {
-            "database": "connected",
-            "result": result.scalar()
-        }
 
 

@@ -6,7 +6,7 @@ from app.auth.roles import UserRole
 class UserRegister(BaseModel):
     full_name: str = Field(min_length=1, max_length=150)
     email: str = Field(min_length=5, max_length=255)
-    password: str
+    password: str = Field(min_length=8, max_length=128)
     otp: str = Field(min_length=6, max_length=6)
     role: UserRole
     warehouse_id: int | None = Field(default=None, gt=0)
@@ -29,4 +29,4 @@ class EmailOtpRequest(BaseModel):
 class PasswordResetConfirm(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     otp: str = Field(min_length=6, max_length=6)
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=128)

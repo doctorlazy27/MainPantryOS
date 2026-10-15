@@ -106,7 +106,7 @@ def get_counter_inventory(db: Session = Depends(get_db), current_user: dict = De
 
 @router.patch("/minimum")
 def set_counter_minimum(body: CounterMinimumUpdate, db: Session = Depends(get_db), current_user: dict = Depends(require_permission("request_store_orders"))):
-    product = db.query(Product).filter(Product.product_id == body.product_id).first()
+    product = db.query(Product).filter(Product.product_id == body.product_id, Product.warehouse_id == current_user.get("warehouse_id")).first()
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     product.reorder_level = body.minimum_level

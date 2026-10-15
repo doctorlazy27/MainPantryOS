@@ -22,7 +22,7 @@ from app.models.order_item import SalesOrderItem
 from app.models.order_inventory_reservation import OrderInventoryReservation
 from app.schemas.inventory_addition_request import InventoryAdditionRequestCreate
 from app.schemas.inventory_addition_approval import InventoryReceiptDetails
-from app.services.serial import register_product_serial
+from app.services.serial import name_equals, register_product_serial
 from app.schemas.inventory_scan import InventoryScan
 from app.schemas.warehouse_workflow import BatchStatusUpdate, PutawayConfirm, TemperatureCheckCreate
 from app.services.activity import log_activity
@@ -305,10 +305,10 @@ def request_inventory_addition(
     current_user: dict = Depends(require_permission("submit_inventory_requests")),
 ):
     warehouse_id = current_user.get("warehouse_id")
-    product = db.query(Product).filter(Product.name.ilike(request.product_name.strip())).first()
+    product = db.query(Product).filter(name_equals(Product.name, request.product_name), Product.warehouse_id == warehouse_id).first()
     quantity = request.boxed_units * request.units_per_box if request.boxed_units else request.quantity
     if product is None:
-        product = Product(name=request.product_name.strip(), category=request.category, quantity=0, unit="units", price=request.unit_price, units_per_box=request.units_per_box, reorder_level=0)
+        product = Product(name=request.product_name.strip(), warehouse_id=warehouse_id, category=request.category, quantity=0, unit="units", price=request.unit_price, units_per_box=request.units_per_box, reorder_level=0)
         db.add(product)
         db.flush()
 
@@ -371,7 +371,7 @@ def receive_inventory_addition(
     if approval.expiry_date <= date.today():
         raise HTTPException(status_code=400, detail="Cannot approve an already expired batch")
     allowed_temperature = temperature_range(approval.storage_zone)
-    passed_qc = temperature_is_safe(approval.storage_zone, approval.temperature_c)
+    passed_qc = approval.temperature_c is None or temperature_is_safe(approval.storage_zone, approval.temperature_c)
     product = db.query(Product).filter(Product.product_id == item.product_id).first()
     if product is None:
         raise HTTPException(status_code=404, detail="Requested product not found")
@@ -451,18 +451,19 @@ def receive_inventory_addition(
             actor_name=current_user["username"],
             reason=f"Inventory addition request #{item.request_id} approved.",
         ))
-    db.add(TemperatureLog(
-        batch_id=batch.batch_id,
-        inventory_id=inventory.inventory_id,
-        warehouse_id=item.warehouse_id,
-        recorded_by=current_user["user_id"],
-        stage="receiving",
-        storage_zone=approval.storage_zone,
-        temperature_c=approval.temperature_c,
-        minimum_c=allowed_temperature.minimum_c,
-        maximum_c=allowed_temperature.maximum_c,
-        within_range=passed_qc,
-    ))
+    if approval.temperature_c is not None:
+        db.add(TemperatureLog(
+            batch_id=batch.batch_id,
+            inventory_id=inventory.inventory_id,
+            warehouse_id=item.warehouse_id,
+            recorded_by=current_user["user_id"],
+            stage="receiving",
+            storage_zone=approval.storage_zone,
+            temperature_c=approval.temperature_c,
+            minimum_c=allowed_temperature.minimum_c,
+            maximum_c=allowed_temperature.maximum_c,
+            within_range=passed_qc,
+        ))
     if not passed_qc:
         notify_roles(db, {"manager"}, "Cold-chain exception", f"Inventory request #{item.request_id} was received outside the {approval.storage_zone.lower()} temperature range and quarantined.", "cold_chain_exception", item.warehouse_id)
     log_activity(db, current_user["user_id"], current_user["username"], "INVENTORY_RECEIVED", f"Received inventory addition request #{item.request_id}: {item.quantity} units, serial {serial}, batch {batch.batch_number}.")
@@ -672,6 +673,7 @@ def get_inventory(db: Session = Depends(get_db), current_user: dict = Depends(re
          "batch_status": db.query(Batch.status).filter(Batch.batch_id == row.batch_id).scalar(),
          "batch_number": db.query(Batch.batch_number).filter(Batch.batch_id == row.batch_id).scalar(),
          "serial_number": db.query(Batch.serial_number).filter(Batch.batch_id == row.batch_id).scalar(),
+         "expiry_date": db.query(Batch.expiry_date).filter(Batch.batch_id == row.batch_id).scalar(),
          "boxed_unit_ids": [box.box_code for box in db.query(BoxedUnit).filter(BoxedUnit.inventory_id == row.inventory_id).all()]}
         for row in inventory
     ]}

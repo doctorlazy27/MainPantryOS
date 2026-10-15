@@ -26,7 +26,7 @@ def calculate_inventory_intelligence(db: Session, warehouse_id: int, today: date
     cutoff = datetime.utcnow() - timedelta(days=30)
     results = []
 
-    for product in db.query(Product).all():
+    for product in db.query(Product).filter(Product.warehouse_id == warehouse_id).all():
         inventory_rows = db.query(Inventory).filter(
             Inventory.product_id == product.product_id,
             Inventory.warehouse_id == warehouse_id,

@@ -1,115 +1,68 @@
-import { FormEvent, useState } from 'react'
-import { getDashboard, getExpiredInventory, getExpiringInventory, getInventory, getProducts, getTemperatureLogs, recordTemperature, updateBatchStatus, DashboardData, InventoryRecord, Product, Role, TemperatureLog } from './api'
-import AppSelect from './AppSelect'
+import { useState } from 'react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { getInventory, getProducts, InventoryRecord, Product, Role } from './api'
 import { LoadingState } from './LoadingState'
 import { useLiveRefresh } from './useLiveRefresh'
 
 type Props = { role: Role; onToast: (message: string) => void }
 
-export default function InventoryOverview({ role, onToast }: Props) {
+const daysUntil = (date?: string | null) => date ? Math.ceil((new Date(date).getTime() - Date.now()) / 86400000) : null
+
+export default function InventoryOverview({ onToast }: Props) {
   const [products, setProducts] = useState<Product[]>([])
   const [inventory, setInventory] = useState<InventoryRecord[]>([])
-  const [expiring, setExpiring] = useState<Awaited<ReturnType<typeof getExpiringInventory>>['items']>([])
-  const [expired, setExpired] = useState<Awaited<ReturnType<typeof getExpiredInventory>>['items']>([])
-  const [intelligence, setIntelligence] = useState<DashboardData['inventory_intelligence']>([])
-  const [lowStock, setLowStock] = useState<DashboardData['low_stock_products']>([])
-  const [temperatureLogs, setTemperatureLogs] = useState<TemperatureLog[]>([])
-  const [temperatureInputs, setTemperatureInputs] = useState<Record<number, string>>({})
-  const [expiryFilter, setExpiryFilter] = useState<'all' | '7' | '3' | '1' | 'expired'>('all')
-  const [sectionFilter, setSectionFilter] = useState('all')
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
 
   const load = async () => {
     try {
-      const [productResult, inventoryResult, expiringResult, expiredResult, dashboard, temperatureResult] = await Promise.all([
-        getProducts(), getInventory(), getExpiringInventory(), getExpiredInventory(), getDashboard(), getTemperatureLogs(),
-      ])
-      setProducts(productResult.products)
-      setInventory(inventoryResult.inventory)
-      setExpiring(expiringResult.items)
-      setExpired(expiredResult.items)
-      setIntelligence(dashboard.inventory_intelligence)
-      setLowStock(dashboard.low_stock_products)
-      setTemperatureLogs(temperatureResult.logs)
-    } catch (error) {
-      onToast(error instanceof Error ? error.message : 'Could not load inventory')
-    }
+      const [productResult, inventoryResult] = await Promise.all([getProducts(), getInventory()])
+      setProducts(productResult.products); setInventory(inventoryResult.inventory)
+    } catch (error) { onToast(error instanceof Error ? error.message : 'Could not load inventory') }
   }
-
   const { initialLoading } = useLiveRefresh(load)
-  if (initialLoading) return <LoadingState label="Loading warehouse inventory" />
+  if (initialLoading) return <LoadingState label="Loading inventory" />
 
-  const rows = products.map((product) => {
-    const records = inventory.filter((item) => item.product_id === product.product_id)
-    const productExpiry = expiring.filter((item) => item.product_id === product.product_id)
-    const stock = records.reduce((total, item) => total + item.quantity, 0)
-    const boxes = records.reduce((total, item) => total + item.boxed_units, 0)
-    const nearestDays = productExpiry.length ? Math.min(...productExpiry.map((item) => item.days_remaining)) : null
-    return {
-      product,
-      stock,
-      boxes,
-      unitCost: records[0]?.unit_price ?? product.price,
-      boxCost: records.reduce((total, item) => total + item.total_box_cost, 0),
-      nearestDays,
-      stockStatus: stock <= product.reorder_level ? 'LOW' : 'GOOD',
-    }
-  })
-  const sections = [...new Set(rows.map(({ product }) => product.storage_section || product.category))]
-  const visibleRows = sectionFilter === 'all' ? rows : rows.filter(({ product }) => (product.storage_section || product.category) === sectionFilter)
-  const visibleExpiring = expiryFilter === 'expired'
-    ? []
-    : expiring.filter((item) => expiryFilter === 'all' || item.days_remaining <= Number(expiryFilter))
+  const unitsOf = (productId: number) => inventory.filter((row) => row.product_id === productId).reduce((sum, row) => sum + row.quantity, 0)
+  const selected = products.find((product) => product.product_id === selectedId) ?? null
 
-  async function setLotStatus(item: InventoryRecord, status: 'active' | 'quarantined' | 'disposed' | 'donated') {
-    const reason = status === 'active' ? 'Manager released batch after QC review' : status === 'disposed' ? 'Manager approved batch disposal' : status === 'donated' ? 'Manager approved donation before expiry' : 'Manager placed batch on quality hold'
-    try { await updateBatchStatus(item.batch_id, status, reason); onToast(`Batch ${item.batch_number ?? item.batch_id} marked ${status}`); await load() }
-    catch (error) { onToast(error instanceof Error ? error.message : 'Could not update batch status') }
+  if (selected) {
+    const batches = inventory.filter((row) => row.product_id === selected.product_id).sort((a, b) => (a.expiry_date ?? '').localeCompare(b.expiry_date ?? ''))
+    const total = unitsOf(selected.product_id)
+    const nearest = batches.filter((row) => row.quantity > 0).map((row) => daysUntil(row.expiry_date)).filter((days): days is number => days !== null)
+    return <>
+      <button className="link-button" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /> All products</button>
+      <section className="module-header"><div><p className="eyebrow">{selected.storage_section || selected.category}</p><h1>{selected.name}</h1><p>Serial number {selected.serial_number ?? 'not registered'}</p></div></section>
+      <section className="stat-grid">
+        <article className="stat-card sage"><div className="stat-card-top"><span>In stock</span></div><div className="stat-value">{total}</div><div className="stat-foot">{selected.unit}</div></article>
+        <article className="stat-card blue"><div className="stat-card-top"><span>Batches</span></div><div className="stat-value">{batches.filter((row) => row.quantity > 0).length}</div><div className="stat-foot">with stock</div></article>
+        <article className="stat-card amber"><div className="stat-card-top"><span>Price</span></div><div className="stat-value">${Number(selected.price).toFixed(2)}</div><div className="stat-foot">per unit</div></article>
+        <article className="stat-card coral"><div className="stat-card-top"><span>Next expiry</span></div><div className="stat-value">{nearest.length ? `${Math.min(...nearest)}d` : '—'}</div><div className="stat-foot">days left</div></article>
+      </section>
+      <section className="panel data-panel">
+        <div className="table-toolbar"><div><p className="eyebrow">Product details</p><h2>Where it is kept</h2></div></div>
+        <div className="detail-list"><div><span>Aisle</span><strong>{selected.aisle || 'Unassigned'}</strong></div><div><span>Shelf</span><strong>{selected.shelf_number || 'Unassigned'}</strong></div><div><span>Section</span><strong>{selected.storage_section || selected.category}</strong></div><div><span>Units per box</span><strong>{selected.units_per_box}</strong></div></div>
+      </section>
+      <section className="panel data-panel">
+        <div className="table-toolbar"><div><p className="eyebrow">Batches</p><h2>Stock by batch</h2></div></div>
+        {batches.length ? <div className="data-table"><div className="data-head"><span>Batch</span><span>Quantity</span><span>Expiry</span><span>Location</span></div>{batches.map((row) => { const days = daysUntil(row.expiry_date); return <div className="data-row" key={row.inventory_id}><strong>{row.batch_number ?? `Batch ${row.batch_id}`}</strong><span>{row.quantity} {selected.unit}</span><span className={days !== null && days <= 7 ? 'warning-text' : ''}>{row.expiry_date ? `${new Date(row.expiry_date).toLocaleDateString()}${days !== null ? days < 0 ? ' · expired' : ` · ${days}d` : ''}` : '—'}</span><span>{row.location_code ?? 'Unassigned'}</span></div> })}</div> : <p className="field-hint">No batches have been received for this product yet.</p>}
+      </section>
+    </>
   }
 
-  async function submitTemperature(item: InventoryRecord) {
-    const reading = Number(temperatureInputs[item.batch_id])
-    if (!Number.isFinite(reading)) { onToast('Enter a valid temperature in Celsius'); return }
-    try {
-      const result = await recordTemperature(item.batch_id, reading)
-      onToast(result.within_range ? `Batch ${item.batch_number ?? item.batch_id} temperature is in range` : `Batch ${item.batch_number ?? item.batch_id} quarantined for temperature exception`)
-      setTemperatureInputs({ ...temperatureInputs, [item.batch_id]: '' })
-      await load()
-    } catch (error) { onToast(error instanceof Error ? error.message : 'Could not record temperature') }
-  }
-
+  const query = search.trim().toLowerCase()
+  const visible = products.filter((product) => !query || product.name.toLowerCase().includes(query) || (product.serial_number ?? '').toLowerCase().includes(query)).sort((a, b) => a.name.localeCompare(b.name))
   return <>
-    {role === 'warehouse_worker' && <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Cold-chain checks</p><h2>Record storage temperature</h2></div></div>{inventory.filter((item) => item.quantity > 0 && item.batch_status === 'active').map((item) => <form className="data-row compact" key={item.batch_id} onSubmit={(event) => { event.preventDefault(); void submitTemperature(item) }}><strong>{products.find((product) => product.product_id === item.product_id)?.name ?? `Product ${item.product_id}`} · {item.batch_number ?? `Batch ${item.batch_id}`}</strong><span>{item.storage_zone} · {item.location_code}</span><label>Temperature (C)<input type="number" step="0.1" required value={temperatureInputs[item.batch_id] ?? ''} onChange={(event) => setTemperatureInputs({ ...temperatureInputs, [item.batch_id]: event.target.value })} /></label><button className="row-action" type="submit">Record check</button></form>)}</section>}
-    {role === 'manager' && <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Waste prevention</p><h2>Donation candidates</h2></div></div>{visibleExpiring.length ? visibleExpiring.map((item) => { const inventoryItem = inventory.find((record) => record.inventory_id === item.inventory_id); return <div className="data-row compact" key={item.inventory_id}><strong>{item.product_name} · {item.batch_number}</strong><span>{item.quantity} units</span><span>Expires in {item.days_remaining} days</span>{inventoryItem && inventoryItem.batch_status === 'active' && <button className="row-action" onClick={() => void setLotStatus(inventoryItem, 'donated')}>Record donation</button>}</div> }) : <p className="field-hint">No batches are approaching expiry within the selected window.</p>}</section>}
-    <section className="panel low-stock-panel"><div className="table-toolbar"><div><p className="eyebrow">Replenishment queue</p><h2>Low stock</h2></div><span className="table-count">{lowStock.length} products need attention</span></div>{lowStock.length ? <div className="low-stock-list">{lowStock.map((item) => <div className="low-stock-item" key={item.product_id}><div><strong>{item.name}</strong><span>{item.current_quantity} {item.unit} available · reorder at {item.reorder_level}</span></div><span className="pill urgent">REFILL</span></div>)}</div> : <p className="field-hint">All tracked products are above their reorder level.</p>}</section>
-    <section className="panel data-panel">
-      <div className="table-toolbar"><div><p className="eyebrow">Warehouse inventory</p><h2>Food sections</h2></div><div className="module-actions"><AppSelect value={sectionFilter} onChange={(event) => setSectionFilter(event.target.value)} aria-label="Filter inventory section"><option value="all">All sections</option>{sections.map((section) => <option key={section} value={section}>{section}</option>)}</AppSelect><button className="button subtle" onClick={() => void load()}>Refresh</button></div></div>
-      {role === 'warehouse_worker' && <p className="field-hint">Stock is grouped by food section. Submit an inventory request below to add boxed units.</p>}
-      {visibleRows.length ? <div className="inventory-sections">{sections.filter((section) => sectionFilter === 'all' || section === sectionFilter).map((section) => <section className="inventory-section" key={section}>
-        <h3>{section}</h3>
-        <div className="data-table"><div className="data-head"><span>Product</span><span>Aisle</span><span>Shelf</span><span>Units</span><span>Boxed units</span><span>Stock</span><span>Expiry</span><span>Per-unit cost</span><span>Total box cost</span><span>Serial number</span></div>
-          {visibleRows.filter(({ product }) => (product.storage_section || product.category) === section).sort((left, right) => `${left.product.aisle} ${left.product.shelf_number} ${left.product.name}`.localeCompare(`${right.product.aisle} ${right.product.shelf_number} ${right.product.name}`)).map(({ product, stock, boxes, unitCost, boxCost, nearestDays, stockStatus }) => <div className="data-row" key={product.product_id}>
-            <strong>{product.name}</strong><span>{product.aisle || 'Unassigned'}</span><span>{product.shelf_number || 'Unassigned'}</span><span>{stock} {product.unit}</span><span>{boxes}</span><span>{stockStatus}</span><span>{nearestDays === null ? 'ACTIVE' : `${nearestDays} days`}</span><span>${Number(unitCost).toFixed(2)}</span><span>${Number(boxCost).toFixed(2)}</span><span>{product.serial_number ?? 'Not registered'}</span>
-          </div>)}
-        </div>
-      </section>)}</div> : <p className="field-hint">No products have been added yet.</p>}
-    </section>
-
-    <section className="panel data-panel">
-      <div className="table-toolbar"><div><p className="eyebrow">Registered stock</p><h2>Batches by serial number</h2></div></div>
-      {inventory.some((item) => item.quantity > 0) ? <div className="data-table"><div className="data-head"><span>Product</span><span>Serial number</span><span>Batch</span><span>Quantity</span><span>Location</span></div>{inventory.filter((item) => item.quantity > 0).map((item) => <div className="data-row" key={item.inventory_id}><strong>{products.find((product) => product.product_id === item.product_id)?.name ?? `Product ${item.product_id}`}</strong><span>{item.serial_number ?? 'Not registered'}</span><span>{item.batch_number ?? `Batch ${item.batch_id}`}</span><span>{item.quantity}</span><span>{item.location_code ?? 'Unassigned'}</span></div>)}</div> : <p className="field-hint">No stock has been registered yet.</p>}
-    </section>
-
-    <section className="panel data-panel">
-      <div className="table-toolbar"><div><p className="eyebrow">Expiry intelligence</p><h2>Priority batches</h2></div></div>
-      <div className="module-actions"><button className="button subtle" onClick={() => setExpiryFilter('all')}>7 days</button><button className="button subtle" onClick={() => setExpiryFilter('3')}>3 days</button><button className="button subtle" onClick={() => setExpiryFilter('1')}>Tomorrow</button><button className="button subtle" onClick={() => setExpiryFilter('expired')}>Expired</button></div>
-      {expiryFilter === 'expired' ? expired.length ? <div className="data-table"><div className="data-head"><span>Product</span><span>Batch</span><span>Status</span><span>Historical units</span><span>Estimated value</span></div>{expired.map((item) => <div className="data-row" key={item.inventory_id}><strong>{item.product_name}</strong><span>{item.batch_number}</span><span className="warning-text">EXPIRED</span><span>{item.quantity}</span><span>${Number(item.estimated_value).toFixed(2)}</span></div>)}</div> : <p className="field-hint">No expired stock is recorded.</p> : visibleExpiring.length ? <div className="data-table"><div className="data-head"><span>Product</span><span>Batch</span><span>Status</span><span>Days remaining</span><span>Units</span><span>Estimated value</span><span>Action</span></div>{visibleExpiring.map((item) => <div className="data-row" key={item.inventory_id}><strong>{item.product_name}</strong><span>{item.batch_number}</span><span className={item.status === 'URGENT' ? 'warning-text' : ''}>{item.status}</span><span>{item.days_remaining}</span><span>{item.quantity}</span><span>${Number(item.estimated_value).toFixed(2)}</span><span>Prioritize FEFO</span></div>)}</div> : <p className="field-hint">No active batches match this expiry filter.</p>}
-    </section>
-
-    <section className="panel data-panel">
-      <div className="table-toolbar"><div><p className="eyebrow">Smart inventory</p><h2>Risk and reorder suggestions</h2></div></div>
-      {intelligence.length ? <div className="data-table"><div className="data-head"><span>Product</span><span>Stock</span><span>Demand/day</span><span>Stockout risk</span><span>Waste risk</span><span>Recommendation</span></div>{intelligence.map((item) => <div className="data-row" key={item.product_id}><strong>{item.product_name}</strong><span>{item.current_stock}</span><span>{item.average_daily_demand}</span><span className={item.stockout_risk === 'HIGH' ? 'warning-text' : ''}>{item.stockout_risk}{item.estimated_days_remaining === null ? '' : ` · ${item.estimated_days_remaining} days`}</span><span className={item.waste_risk === 'HIGH' ? 'warning-text' : ''}>{item.waste_risk}</span><span>{item.recommendation}{item.recommended_reorder > 0 ? ` · Suggested reorder: ${item.recommended_reorder}` : ''}</span></div>)}</div> : <p className="field-hint">Smart recommendations will appear as order and inventory history accumulates.</p>}
-    </section>
-    <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Cold-chain monitoring</p><h2>Recent temperature readings</h2></div></div>{temperatureLogs.length ? <div className="data-table"><div className="data-head"><span>Batch</span><span>Zone</span><span>Reading</span><span>Allowed range</span><span>Stage</span><span>Recorded</span></div>{temperatureLogs.slice(0, 12).map((log) => <div className="data-row" key={log.temperature_log_id}><strong>#{log.batch_id}</strong><span>{log.storage_zone}</span><span className={log.within_range ? '' : 'warning-text'}>{log.temperature_c} C · {log.within_range ? 'OK' : 'OUT OF RANGE'}</span><span>{log.minimum_c} to {log.maximum_c ?? 'no max'} C</span><span>{log.stage}</span><span>{new Date(log.recorded_at).toLocaleString()}</span></div>)}</div> : <p className="field-hint">No temperature readings have been recorded.</p>}</section>
-    {role === 'manager' && <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Quality control</p><h2>Quarantine and disposal</h2></div></div>{inventory.filter((item) => item.batch_status === 'quarantined' || item.batch_status === 'active').length ? inventory.filter((item) => item.batch_status === 'quarantined' || item.batch_status === 'active').map((item) => <div className="data-row compact" key={item.inventory_id}><strong>{item.batch_number ?? `Batch ${item.batch_id}`}</strong><span>{products.find((product) => product.product_id === item.product_id)?.name ?? `Product ${item.product_id}`}</span><span>{item.quantity} units · {item.batch_status}</span><span>{item.location_code ?? 'Unassigned'}</span>{item.batch_status === 'quarantined' && <button className="row-action" onClick={() => void setLotStatus(item, 'active')}>Release to putaway</button>}{item.batch_status === 'active' && <button className="row-action" onClick={() => void setLotStatus(item, 'quarantined')}>Quarantine</button>}<button className="row-action danger" onClick={() => void setLotStatus(item, 'disposed')}>Dispose</button></div>) : <p className="field-hint">No active or quarantined lots need a quality decision.</p>}</section>}
+    <section className="module-header"><div><p className="eyebrow">Warehouse inventory</p><h1>Products</h1><p>Tap a product to see its batches, expiry dates and shelf location.</p></div></section>
+    <label className="search-field"><Search size={18} /><input type="search" placeholder="Search by name or serial number" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+    {visible.length ? <section className="product-list">{visible.map((product) => {
+      const units = unitsOf(product.product_id)
+      const status = units <= 0 ? 'OUT' : units <= product.reorder_level ? 'LOW' : 'IN STOCK'
+      return <button className="product-card" key={product.product_id} onClick={() => setSelectedId(product.product_id)}>
+        <div><strong>{product.name}</strong><small>{product.serial_number ? `Serial ${product.serial_number}` : product.storage_section || product.category}</small></div>
+        <div className="product-card-stock"><strong>{units}</strong><span className={`pill ${status === 'IN STOCK' ? 'ready' : 'urgent'}`}>{status}</span></div>
+        <ChevronRight size={18} />
+      </button>
+    })}</section> : <div className="panel"><div className="empty-state"><strong>{products.length ? 'No matching products' : 'No products yet'}</strong><span>{products.length ? 'Try a different name or serial number.' : 'Products appear here after a worker receives an approved stock request.'}</span></div></div>}
   </>
 }

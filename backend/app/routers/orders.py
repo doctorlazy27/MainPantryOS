@@ -113,9 +113,9 @@ def create_order(
         require_permission("create_orders")
     )
 ):
-    customer = db.query(Customer).filter(Customer.customer_id == order.customer_id).first() if order.customer_id else None
+    customer = db.query(Customer).filter(Customer.customer_id == order.customer_id, Customer.warehouse_id == current_user.get("warehouse_id")).first() if order.customer_id else None
     if customer is None and order.customer_name:
-        customer = Customer(name=order.customer_name.strip(), phone="Not provided")
+        customer = Customer(name=order.customer_name.strip(), phone="Not provided", warehouse_id=current_user.get("warehouse_id"))
         db.add(customer)
         db.flush()
     if customer is None:
@@ -148,7 +148,8 @@ def create_order(
 
     for item in order.items:
         product = db.query(Product).filter(
-            Product.product_id == item.product_id
+            Product.product_id == item.product_id,
+            Product.warehouse_id == current_user.get("warehouse_id"),
         ).first()
 
         if product is None:
