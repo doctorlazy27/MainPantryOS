@@ -36,5 +36,7 @@ class Batch(Base):
         nullable=False
     )
 
+    serial_number: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     expired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

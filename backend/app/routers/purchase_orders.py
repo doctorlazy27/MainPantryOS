@@ -16,6 +16,7 @@ from app.models.inventory import Inventory
 from app.models.inventory_movement import InventoryMovement
 from app.models.temperature_log import TemperatureLog
 from app.services.boxed_units import create_boxed_units
+from app.services.serial import register_product_serial
 from app.services.cold_chain import temperature_is_safe, temperature_range
 from app.models.warehouse import Warehouse
 from app.models.supplier import Supplier
@@ -159,8 +160,10 @@ def receive_purchase_order(
 
         temp_range = temperature_range(item.storage_zone)
         passed_qc = temperature_is_safe(item.storage_zone, item.temperature_c)
+        serial = register_product_serial(db, product, item.serial_number)
         batch = Batch(
             product_id=product.product_id,
+            serial_number=serial,
             batch_number=batch_number,
             manufacturing_date=item.manufacturing_date,
             expiry_date=item.expiry_date,

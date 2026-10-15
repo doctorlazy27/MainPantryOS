@@ -14,6 +14,7 @@ class ReceiveItem(BaseModel):
     unit_price: float = Field(default=0, ge=0)
     box_unit_cost: float = Field(default=0, ge=0)
     scanned_codes: list[str] = Field(default_factory=list)
+    serial_number: str = Field(min_length=1, max_length=120)
     batch_number: str
     manufacturing_date: date
     expiry_date: date

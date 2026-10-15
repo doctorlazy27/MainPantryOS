@@ -111,7 +111,7 @@ def register_user(
 ):
     email = user.email.strip().lower()
     _consume_otp(db, email, "signup", user.otp)
-    if user.role not in set(UserRole):
+    if user.role not in {UserRole.MANAGER, UserRole.WAREHOUSE_WORKER}:
         raise HTTPException(status_code=400, detail="Only manager and warehouse worker accounts can be created")
     existing_user = db.query(User).filter(User.email == email).first()
     existing_request = db.query(RegistrationRequest).filter(

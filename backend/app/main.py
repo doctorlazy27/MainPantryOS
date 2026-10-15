@@ -50,6 +50,9 @@ from app.routers.internal_jobs import router as internal_jobs_router
 from app.models.inventory_recommendation import InventoryRecommendation
 from app.routers.recommendations import router as recommendations_router
 from app.routers.counter import router as counter_router
+from app.routers.store_orders import router as store_orders_router
+from app.routers.cashiers import router as cashiers_router
+from app.models.store_order import StoreOrder
 from app.services.expiry import process_expiry
 from app.services.intelligence import process_inventory_intelligence
 from app.routers.dashboard import router as dashboard_router
@@ -154,6 +157,8 @@ app.include_router(dashboard_router)
 app.include_router(internal_jobs_router)
 app.include_router(recommendations_router)
 app.include_router(counter_router)
+app.include_router(store_orders_router)
+app.include_router(cashiers_router)
 
 @app.get("/")
 def root():

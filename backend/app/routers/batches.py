@@ -6,6 +6,8 @@ from fastapi import HTTPException
 from app.database import get_db
 from app.models.batch import Batch
 from app.schemas.batch import BatchCreate
+from app.models.product import Product
+from app.services.serial import register_product_serial
 from app.auth.dependencies import require_permission
 
 
@@ -25,8 +27,13 @@ def create_batch(
         raise HTTPException(status_code=400, detail="Expiry date must be after manufacturing date")
     if batch.expiry_date <= date.today():
         raise HTTPException(status_code=400, detail="Cannot create an already expired batch")
+    product = db.query(Product).filter(Product.product_id == batch.product_id).first()
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    serial = register_product_serial(db, product, batch.serial_number)
     new_batch = Batch(
         product_id=batch.product_id,
+        serial_number=serial,
         batch_number=batch.batch_number,
         manufacturing_date=batch.manufacturing_date,
         expiry_date=batch.expiry_date

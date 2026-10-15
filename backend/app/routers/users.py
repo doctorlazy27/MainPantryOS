@@ -2,7 +2,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import require_permission
+from app.auth.dependencies import get_current_user, require_permission
 from app.auth.security import verify_password
 from app.database import get_db
 from app.models.activity_log import ActivityLog
@@ -18,6 +18,8 @@ from app.models.counter_allocation import CounterAllocation
 from app.models.counter_sale import CounterSale
 from app.models.inventory_addition_request import InventoryAdditionRequest
 from app.models.warehouse_request import WarehouseRequest
+from app.models.store_order import StoreOrder
+from app.models.registration_request import RegistrationRequest
 from app.models.inventory_movement import InventoryMovement
 from app.models.inventory_recommendation import InventoryRecommendation
 from app.models.order_pick_scan import OrderPickScan
@@ -47,6 +49,25 @@ def get_users(db: Session = Depends(get_db), current_user: dict = Depends(requir
             for user in users
         ]
     }
+
+
+@router.post("/me/remove")
+def remove_own_worker_account(
+    deletion: UserDelete,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user = db.query(User).filter(User.user_id == current_user["user_id"]).first()
+    if user is None or user.role != "warehouse_worker":
+        raise HTTPException(status_code=403, detail="Only warehouse worker accounts can self-delete here")
+    if not verify_password(deletion.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    manager = db.query(User).filter(User.role == "manager", User.warehouse_id == user.warehouse_id).first()
+    if manager is None:
+        raise HTTPException(status_code=400, detail="Your warehouse has no manager to keep your work history")
+    actor = {"user_id": manager.user_id, "username": manager.full_name, "role": manager.role, "warehouse_id": manager.warehouse_id}
+    remove_user(user.user_id, None, db, actor)
+    return {"message": "Account deleted. You can sign up again at any warehouse."}
 
 
 @router.api_route("/{user_id}", methods=["DELETE"], include_in_schema=True)
@@ -118,6 +139,18 @@ def remove_user(
     db.query(InventoryAdditionRequest).filter(InventoryAdditionRequest.reviewed_by == user_id).update(
         {InventoryAdditionRequest.reviewed_by: None}, synchronize_session=False
     )
+    db.query(StoreOrder).filter(StoreOrder.requested_by == user_id).update(
+        {StoreOrder.requested_by: history_owner_id}, synchronize_session=False
+    )
+    db.query(StoreOrder).filter(StoreOrder.dispatched_by == user_id).update(
+        {StoreOrder.dispatched_by: None}, synchronize_session=False
+    )
+    db.query(StoreOrder).filter(StoreOrder.received_by == user_id).update(
+        {StoreOrder.received_by: None}, synchronize_session=False
+    )
+    db.query(InventoryAdditionRequest).filter(InventoryAdditionRequest.received_by == user_id).update(
+        {InventoryAdditionRequest.received_by: None}, synchronize_session=False
+    )
     db.query(WarehouseRequest).filter(WarehouseRequest.requested_by == user_id).update(
         {WarehouseRequest.requested_by: history_owner_id}, synchronize_session=False
     )
@@ -163,6 +196,12 @@ def remove_user(
             synchronize_session=False
         )
 
+    db.query(RegistrationRequest).filter(RegistrationRequest.reviewed_by == user_id).update(
+        {RegistrationRequest.reviewed_by: None}, synchronize_session=False
+    )
+    if user.email:
+        # A leftover approved request would block the same email from signing up again.
+        db.query(RegistrationRequest).filter(RegistrationRequest.email == user.email).delete(synchronize_session=False)
     db.delete(user)
     db.commit()
 

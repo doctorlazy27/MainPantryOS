@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
 
 
-class CounterAllocationCreate(BaseModel):
+class CounterMinimumUpdate(BaseModel):
     product_id: int
-    quantity: int = Field(gt=0)
+    minimum_level: int = Field(ge=0)
 
 
 class CheckoutItem(BaseModel):

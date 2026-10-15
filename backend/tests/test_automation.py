@@ -60,17 +60,17 @@ from app.services.ai_assistant import suggest_inventory_actions
 from app.services.intelligence import process_inventory_intelligence
 from app.services.invoice_reports import build_invoice_report, period_window
 from app.services import ai_provider
-from app.routers.orders import _fefo_plan, approve_order, approve_warehouse_request, cancel_order, confirm_order_receipt, create_order, fulfill_order, scan_order_pick
+from app.routers.orders import _fefo_plan, approve_order, cancel_order, confirm_order_receipt, create_order, fulfill_order, scan_order_pick
 from app.routers.recommendations import review_recommendation
 from app.routers.invoices import confirm_invoice, generate_invoice, get_invoice, get_invoices, send_invoice, summarize_invoice_period
-from app.routers.inventory import approve_inventory_addition, confirm_putaway, record_storage_temperature, request_inventory_addition
-from app.routers.counter import approve_counter_allocation, checkout, reject_counter_allocation
+from app.routers.inventory import approve_inventory_addition, confirm_putaway, receive_inventory_addition, record_storage_temperature, reject_inventory_addition, request_inventory_addition
+from app.routers.counter import checkout, lookup_counter_barcode
 from app.routers.counter import warehouse_copilot
 from app.routers.stock_transfers import list_stock_transfers
 from app.routers.users import remove_user
 from app.routers.purchase_orders import cancel_purchase_order, receive_purchase_order
 from app.schemas.counter import CheckoutCreate, CheckoutItem
-from app.schemas.inventory_addition_approval import InventoryAdditionApproval
+from app.schemas.inventory_addition_approval import InventoryReceiptDetails
 from app.schemas.inventory_addition_request import InventoryAdditionRequestCreate
 from app.schemas.order import OrderItemCreate, SalesOrderCreate
 from app.schemas.warehouse_workflow import OrderPickScanCreate, PutawayConfirm, TemperatureCheckCreate
@@ -176,18 +176,26 @@ def test_manager_has_sales_workflow_and_signup_hides_legacy_role():
     assert has_permission(UserRole.MANAGER, "request_stock_transfer")
     assert has_permission(UserRole.MANAGER, "approve_sales_orders")
     assert has_permission(UserRole.MANAGER, "view_invoices")
-    assert has_permission(UserRole.MANAGER, "request_warehouse_stock")
-    assert has_permission(UserRole.MANAGER, "update_inventory")
-    assert has_permission(UserRole.WAREHOUSE_WORKER, "process_stock_requests")
-    assert not has_permission(UserRole.MANAGER, "process_stock_requests")
+    assert has_permission(UserRole.MANAGER, "request_store_orders")
+    assert has_permission(UserRole.MANAGER, "receive_store_orders")
+    assert has_permission(UserRole.MANAGER, "manage_cashiers")
+    assert has_permission(UserRole.MANAGER, "approve_inventory_requests")
+    for retired in ("request_warehouse_stock", "update_inventory", "receive_purchase_orders", "review_inventory_recommendations", "create_purchase_orders", "checkout_counter", "request_counter_allocation"):
+        assert not has_permission(UserRole.MANAGER, retired)
+    assert has_permission(UserRole.WAREHOUSE_WORKER, "dispatch_store_orders")
+    assert has_permission(UserRole.WAREHOUSE_WORKER, "update_inventory")
+    assert not has_permission(UserRole.WAREHOUSE_WORKER, "checkout_counter")
+    assert not has_permission(UserRole.WAREHOUSE_WORKER, "approve_inventory_requests")
+    assert has_permission(UserRole.CASHIER, "checkout_counter")
+    assert not has_permission(UserRole.CASHIER, "view_orders")
+    assert not has_permission(UserRole.CASHIER, "view_counter_sales")
     assert not has_permission(UserRole.WAREHOUSE_WORKER, "view_customers")
     assert not has_permission(UserRole.WAREHOUSE_WORKER, "view_suppliers")
-    assert not has_permission(UserRole.WAREHOUSE_WORKER, "request_warehouse_stock")
     assert not has_permission(UserRole.WAREHOUSE_WORKER, "view_stock_transfers")
     assert set(get_roles()["roles"]) == {UserRole.MANAGER.value, UserRole.WAREHOUSE_WORKER.value}
     assert not has_permission(UserRole.WAREHOUSE_WORKER, "approve_sales_orders")
     assert not has_permission(UserRole.WAREHOUSE_WORKER, "view_invoices")
-    assert all(has_permission(role, "view_ai_copilot") for role in UserRole)
+    assert has_permission(UserRole.MANAGER, "view_ai_copilot") and has_permission(UserRole.WAREHOUSE_WORKER, "view_ai_copilot")
 
 
 def test_logout_revokes_only_the_current_session(db):
@@ -460,42 +468,6 @@ def test_approved_orders_reserve_stock_and_cancellation_releases_it(db):
     assert db.query(OrderInventoryReservation).filter_by(order_id=first.order_id, status="reserved").count() == 0
 
 
-def test_counter_and_warehouse_requests_cannot_take_order_reserved_stock(db):
-    warehouse = Warehouse(name="Shared stock warehouse", location="Test")
-    manager = User(username="shared-stock-manager", full_name="Manager", role="manager", password_hash="x")
-    worker = User(username="shared-stock-worker", full_name="Worker", role="warehouse_worker", password_hash="x")
-    customer = Customer(name="Shared stock buyer", phone="000")
-    product = Product(name="Shared reserved product", category="General", quantity=0, unit="units", price=1, units_per_box=1)
-    db.add_all([warehouse, manager, worker, customer, product])
-    db.flush()
-    manager.warehouse_id = worker.warehouse_id = warehouse.warehouse_id
-    batch = Batch(product_id=product.product_id, batch_number="SHARED-RESERVATION-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
-    db.add(batch)
-    db.flush()
-    inventory = Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=batch.batch_id, quantity=5)
-    order = SalesOrder(customer_id=customer.customer_id, created_by=manager.user_id, warehouse_id=warehouse.warehouse_id, status="approved", reservation_status="reserved")
-    db.add_all([inventory, order])
-    db.flush()
-    reservation = OrderInventoryReservation(order_id=order.order_id, inventory_id=inventory.inventory_id, product_id=product.product_id, batch_id=batch.batch_id, warehouse_id=warehouse.warehouse_id, quantity=4)
-    stock_request = WarehouseRequest(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, requested_by=manager.user_id, quantity=2, status="pending")
-    allocation = CounterAllocation(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, requested_by=worker.user_id, quantity=2, status="pending")
-    db.add_all([reservation, stock_request, allocation])
-    db.commit()
-    worker_actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
-    manager_actor = {"user_id": manager.user_id, "username": manager.full_name, "role": manager.role, "warehouse_id": warehouse.warehouse_id}
-
-    with pytest.raises(HTTPException) as stock_error:
-        approve_warehouse_request(stock_request.request_id, db, worker_actor)
-    with pytest.raises(HTTPException) as counter_error:
-        approve_counter_allocation(allocation.allocation_id, db, manager_actor)
-
-    assert stock_error.value.status_code == 400
-    assert counter_error.value.status_code == 400
-    assert inventory.quantity == 5
-    assert stock_request.status == "pending"
-    assert allocation.status == "pending"
-
-
 def test_worker_removal_preserves_pick_history_and_clears_optional_actor_references(db):
     warehouse = Warehouse(name="Removal warehouse", location="Test")
     manager = User(username="removal-manager", full_name="Manager", role="manager", password_hash="x")
@@ -597,7 +569,8 @@ def test_worker_inventory_request_approval_has_consistent_audit(db):
 
     request = InventoryAdditionRequestCreate(product_name="Beans", quantity=12, category="Canned", unit_price=2)
     created = request_inventory_addition(request, db, actor(worker))
-    approval = InventoryAdditionApproval(
+    approval = InventoryReceiptDetails(
+        serial_number="BEANS-SERIAL-1",
         batch_number="BEANS-1",
         manufacturing_date=date.today() - timedelta(days=1),
         expiry_date=date.today() + timedelta(days=100),
@@ -606,19 +579,40 @@ def test_worker_inventory_request_approval_has_consistent_audit(db):
         aisle="A1",
         shelf_number="S1",
     )
-    result = approve_inventory_addition(created["request_id"], approval, db, actor(manager))
+    approved = approve_inventory_addition(created["request_id"], db, actor(manager))
+    assert db.query(Inventory).count() == 0
+    with pytest.raises(HTTPException) as early_error:
+        receive_inventory_addition(created["request_id"] + 99, approval, db, actor(worker))
+    assert early_error.value.status_code == 404
+    result = receive_inventory_addition(created["request_id"], approval, db, actor(worker))
     addition = db.query(InventoryAdditionRequest).filter_by(request_id=created["request_id"]).one()
     inventory = db.query(Inventory).filter_by(warehouse_id=warehouse.warehouse_id).one()
-    putaway = confirm_putaway(inventory.inventory_id, PutawayConfirm(storage_zone="AMBIENT", location_code="A1-S1"), db, actor(worker))
+    batch = db.query(Batch).filter_by(batch_id=inventory.batch_id).one()
+    product = db.query(Product).filter_by(product_id=inventory.product_id).one()
     actions = {entry.action for entry in db.query(ActivityLog).all()}
 
-    assert result["status"] == "approved"
-    assert addition.status == "approved"
+    assert approved["status"] == "approved"
+    assert result["status"] == "received"
+    assert addition.status == "received"
     assert inventory.quantity == 12
-    assert putaway["putaway_status"] == "confirmed"
+    assert inventory.putaway_status == "confirmed"
+    assert inventory.location_code == "A1-S1"
+    assert batch.serial_number == "BEANS-SERIAL-1"
+    assert product.serial_number == "BEANS-SERIAL-1"
     assert inventory.storage_zone == "AMBIENT"
     assert "INVENTORY_REQUEST_APPROVED" in actions
+    assert "INVENTORY_RECEIVED" in actions
     assert "INVENTORY_REQUEST_REJECTED" not in actions
+
+    other = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Rice", quantity=3, category="Dry", unit_price=1), db, actor(worker))
+    approve_inventory_addition(other["request_id"], db, actor(manager))
+    with pytest.raises(HTTPException) as serial_error:
+        receive_inventory_addition(other["request_id"], approval.model_copy(update={"batch_number": "RICE-1"}), db, actor(worker))
+    assert serial_error.value.status_code == 409
+
+    rejected = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Salt", quantity=1, category="Dry", unit_price=1), db, actor(worker))
+    reject_inventory_addition(rejected["request_id"], db, actor(manager))
+    assert db.query(InventoryAdditionRequest).filter_by(request_id=rejected["request_id"]).one().status == "rejected"
 
 
 def test_counter_checkout_rejects_multiple_lines_that_overdraw_same_stock(db):
@@ -628,23 +622,19 @@ def test_counter_checkout_rejects_multiple_lines_that_overdraw_same_stock(db):
     db.add_all([warehouse, worker, product])
     db.flush()
     worker.warehouse_id = warehouse.warehouse_id
-    batch = Batch(product_id=product.product_id, batch_number="COUNTER-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
+    batch = Batch(product_id=product.product_id, serial_number="COUNTER-SERIAL", batch_number="COUNTER-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
     db.add(batch)
     db.flush()
     inventory = Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=batch.batch_id, quantity=10)
     db.add(inventory)
     db.flush()
     counter = CounterInventory(warehouse_id=warehouse.warehouse_id, product_id=product.product_id, batch_id=batch.batch_id, quantity=5, minimum_level=1, unit_price=product.price)
-    db.add_all([
-        counter,
-        BoxedUnit(inventory_id=inventory.inventory_id, scanned_code="COUNTER-A", units=5, remaining_units=5, unit_cost=product.price),
-        BoxedUnit(inventory_id=inventory.inventory_id, scanned_code="COUNTER-B", units=5, remaining_units=5, unit_cost=product.price),
-    ])
+    db.add(counter)
     db.commit()
 
     request = CheckoutCreate(items=[
-        CheckoutItem(scanned_code="COUNTER-A", quantity=3),
-        CheckoutItem(scanned_code="COUNTER-B", quantity=3),
+        CheckoutItem(scanned_code="COUNTER-SERIAL", quantity=3),
+        CheckoutItem(scanned_code="COUNTER-SERIAL", quantity=3),
     ])
     actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
     with pytest.raises(HTTPException) as error:
@@ -662,15 +652,14 @@ def test_counter_checkout_retry_with_same_key_records_one_sale_and_box_deduction
     db.add_all([warehouse, worker, product])
     db.flush()
     worker.warehouse_id = warehouse.warehouse_id
-    batch = Batch(product_id=product.product_id, batch_number="RETRY-COUNTER-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
+    batch = Batch(product_id=product.product_id, serial_number="RETRY-COUNTER-CODE", batch_number="RETRY-COUNTER-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
     db.add(batch)
     db.flush()
     inventory = Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=batch.batch_id, quantity=1)
     db.add(inventory)
     db.flush()
     counter = CounterInventory(warehouse_id=warehouse.warehouse_id, product_id=product.product_id, batch_id=batch.batch_id, quantity=1, minimum_level=1, unit_price=product.price)
-    boxed_unit = BoxedUnit(inventory_id=inventory.inventory_id, scanned_code="RETRY-COUNTER-CODE", units=1, remaining_units=1, unit_cost=product.price)
-    db.add_all([counter, boxed_unit])
+    db.add(counter)
     db.commit()
     request = CheckoutCreate(request_key="RETRY-COUNTER-REQUEST", items=[CheckoutItem(scanned_code="RETRY-COUNTER-CODE", quantity=1)])
     actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
@@ -681,30 +670,11 @@ def test_counter_checkout_retry_with_same_key_records_one_sale_and_box_deduction
     assert first["duplicate"] is False
     assert retry["duplicate"] is True
     assert retry["sale_id"] == first["sale_id"]
-    assert retry["remaining_quantity"] == 0
+    assert first["items"][0]["serial_number"] == "RETRY-COUNTER-CODE"
+    assert first["total_amount"] == 3
     assert counter.quantity == 0
-    assert boxed_unit.remaining_units == 0
     assert db.query(CounterSale).count() == 1
     assert db.query(CounterSaleItem).count() == 1
-
-
-def test_manager_can_reject_unfulfillable_counter_allocation(db):
-    warehouse = Warehouse(name="Rejected allocation warehouse", location="Test")
-    manager = User(username="reject-allocation-manager", full_name="Manager", role="manager", password_hash="x")
-    worker = User(username="reject-allocation-worker", full_name="Worker", role="warehouse_worker", password_hash="x")
-    product = Product(name="Unavailable counter product", category="General", quantity=0, unit="units", price=1, units_per_box=1)
-    db.add_all([warehouse, manager, worker, product])
-    db.flush()
-    manager.warehouse_id = worker.warehouse_id = warehouse.warehouse_id
-    allocation = CounterAllocation(warehouse_id=warehouse.warehouse_id, product_id=product.product_id, quantity=10, requested_by=worker.user_id, status="pending")
-    db.add(allocation)
-    db.commit()
-    actor = {"user_id": manager.user_id, "username": manager.full_name, "role": manager.role, "warehouse_id": warehouse.warehouse_id}
-
-    result = reject_counter_allocation(allocation.allocation_id, db, actor)
-
-    assert result["status"] == "rejected"
-    assert allocation.reviewed_by == manager.user_id
 
 
 def test_manager_cannot_cancel_orders_or_reject_allocations_from_another_warehouse(db):
@@ -724,8 +694,7 @@ def test_manager_cannot_cancel_orders_or_reject_allocations_from_another_warehou
     db.flush()
     inventory = Inventory(product_id=product.product_id, warehouse_id=second_warehouse.warehouse_id, batch_id=batch.batch_id, quantity=2)
     order = SalesOrder(customer_id=customer.customer_id, created_by=second_manager.user_id, warehouse_id=second_warehouse.warehouse_id, status="approved", reservation_status="reserved")
-    allocation = CounterAllocation(warehouse_id=second_warehouse.warehouse_id, product_id=product.product_id, quantity=1, requested_by=worker.user_id, status="pending")
-    db.add_all([inventory, order, allocation])
+    db.add_all([inventory, order])
     db.flush()
     reservation = OrderInventoryReservation(order_id=order.order_id, inventory_id=inventory.inventory_id, product_id=product.product_id, batch_id=batch.batch_id, warehouse_id=second_warehouse.warehouse_id, quantity=2)
     db.add(reservation)
@@ -734,13 +703,9 @@ def test_manager_cannot_cancel_orders_or_reject_allocations_from_another_warehou
 
     with pytest.raises(HTTPException) as cancel_error:
         cancel_order(order.order_id, db, actor)
-    with pytest.raises(HTTPException) as reject_error:
-        reject_counter_allocation(allocation.allocation_id, db, actor)
 
     assert cancel_error.value.status_code == 404
-    assert reject_error.value.status_code == 404
     assert order.status == "approved"
-    assert allocation.status == "pending"
 
 
 def test_receiving_purchase_order_accepts_distinct_lots_per_product(db):
@@ -762,8 +727,8 @@ def test_receiving_purchase_order_accepts_distinct_lots_per_product(db):
     ])
     db.commit()
     receiving = ReceivePurchaseOrder(warehouse_id=warehouse.warehouse_id, items=[
-        ReceiveItem(product_id=first_product.product_id, quantity=10, batch_number="RICE-LOT-A", manufacturing_date=date.today() - timedelta(days=2), expiry_date=date.today() + timedelta(days=100), storage_zone="AMBIENT", temperature_c=20),
-        ReceiveItem(product_id=second_product.product_id, quantity=6, batch_number="MILK-LOT-B", manufacturing_date=date.today() - timedelta(days=1), expiry_date=date.today() + timedelta(days=20), storage_zone="CHILLED", temperature_c=4),
+        ReceiveItem(product_id=first_product.product_id, serial_number="RICE-SERIAL", quantity=10, batch_number="RICE-LOT-A", manufacturing_date=date.today() - timedelta(days=2), expiry_date=date.today() + timedelta(days=100), storage_zone="AMBIENT", temperature_c=20),
+        ReceiveItem(product_id=second_product.product_id, serial_number="MILK-SERIAL", quantity=6, batch_number="MILK-LOT-B", manufacturing_date=date.today() - timedelta(days=1), expiry_date=date.today() + timedelta(days=20), storage_zone="CHILLED", temperature_c=4),
     ])
     actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
 
@@ -784,7 +749,7 @@ def test_receiving_purchase_order_accepts_distinct_lots_per_product(db):
     db.add(PurchaseOrderItem(purchase_order_id=duplicate_order.purchase_order_id, product_id=first_product.product_id, quantity=1, unit_price=first_product.price))
     db.commit()
     duplicate_receiving = ReceivePurchaseOrder(warehouse_id=warehouse.warehouse_id, items=[
-        ReceiveItem(product_id=first_product.product_id, quantity=1, batch_number="RICE-LOT-A", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=100), storage_zone="AMBIENT", temperature_c=20),
+        ReceiveItem(product_id=first_product.product_id, serial_number="RICE-SERIAL", quantity=1, batch_number="RICE-LOT-A", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=100), storage_zone="AMBIENT", temperature_c=20),
     ])
     with pytest.raises(HTTPException) as duplicate_error:
         receive_purchase_order(duplicate_order.purchase_order_id, duplicate_receiving, db, actor)
@@ -810,37 +775,6 @@ def test_manager_can_cancel_pending_purchase_order(db):
 
     assert result["status"] == "cancelled"
     assert order.status == "cancelled"
-
-
-def test_worker_stock_request_approval_transfers_inventory_to_counter_using_fefo(db):
-    warehouse = Warehouse(name="Stock request warehouse", location="Test")
-    manager = User(username="stock-request-manager", full_name="Manager", role="manager", password_hash="x")
-    worker = User(username="stock-request-worker", full_name="Worker", role="warehouse_worker", password_hash="x")
-    product = Product(name="Restock product", category="General", quantity=0, unit="units", price=4, units_per_box=1)
-    db.add_all([warehouse, manager, worker, product])
-    db.flush()
-    manager.warehouse_id = warehouse.warehouse_id
-    worker.warehouse_id = warehouse.warehouse_id
-    earlier_batch = Batch(product_id=product.product_id, batch_number="RESTOCK-1", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=5))
-    later_batch = Batch(product_id=product.product_id, batch_number="RESTOCK-2", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=10))
-    db.add_all([earlier_batch, later_batch])
-    db.flush()
-    earlier_inventory = Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=earlier_batch.batch_id, quantity=4)
-    later_inventory = Inventory(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, batch_id=later_batch.batch_id, quantity=4)
-    request = WarehouseRequest(product_id=product.product_id, warehouse_id=warehouse.warehouse_id, requested_by=manager.user_id, quantity=5)
-    db.add_all([earlier_inventory, later_inventory, request])
-    db.commit()
-
-    actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
-    result = approve_warehouse_request(request.request_id, db, actor)
-
-    counter_rows = db.query(CounterInventory).order_by(CounterInventory.batch_id.asc()).all()
-    movements = db.query(InventoryMovement).filter(InventoryMovement.movement_type == "TRANSFER_TO_COUNTER").all()
-    assert result["status"] == "approved"
-    assert earlier_inventory.quantity == 0
-    assert later_inventory.quantity == 3
-    assert [row.quantity for row in counter_rows] == [4, 1]
-    assert sum(movement.quantity for movement in movements) == 5
 
 
 def test_transfer_queue_is_scoped_to_manager_warehouse(db):
@@ -1104,3 +1038,107 @@ def test_internal_expiry_job_authorized_request_is_safe(monkeypatch, db):
     monkeypatch.setattr(internal_jobs, "process_expiry", lambda _db: {"expired_batches": 0, "expired_units": 0, "warnings": 0})
     response = process_expiry_job("test-secret")
     assert response["status"] == "ok"
+
+def test_store_order_flow_moves_a_serial_batch_from_warehouse_to_counter(db):
+    from app.models.store_order import StoreOrder
+    from app.routers.store_orders import create_store_order, dispatch_store_order, list_available_batches, receive_store_order
+    from app.schemas.store_order import StoreOrderCreate
+
+    warehouse, product, batch, inventory = seed_expiring_inventory(db)
+    batch.expiry_date = date.today() + timedelta(days=30)
+    batch.serial_number = "MILK-SERIAL-9"
+    inventory.putaway_status = "confirmed"
+    db.commit()
+    manager = db.query(User).filter_by(role="manager").one()
+    worker = db.query(User).filter_by(role="warehouse_worker").one()
+
+    def actor(user):
+        return {"user_id": user.user_id, "username": user.full_name, "role": user.role, "warehouse_id": warehouse.warehouse_id}
+
+    available = list_available_batches(db, actor(manager))["items"]
+    assert available[0]["serial_number"] == "MILK-SERIAL-9" and available[0]["available_quantity"] == 100
+    with pytest.raises(HTTPException) as too_many:
+        create_store_order(StoreOrderCreate(inventory_id=inventory.inventory_id, quantity=101, needed_by=datetime.utcnow() + timedelta(hours=4)), db, actor(manager))
+    assert too_many.value.status_code == 400
+    created = create_store_order(StoreOrderCreate(inventory_id=inventory.inventory_id, quantity=40, needed_by=datetime.utcnow() + timedelta(hours=4)), db, actor(manager))
+    assert list_available_batches(db, actor(manager))["items"][0]["available_quantity"] == 60
+    with pytest.raises(HTTPException):
+        receive_store_order(created["store_order_id"], db, actor(manager))
+    dispatch_store_order(created["store_order_id"], db, actor(worker))
+    assert inventory.quantity == 60
+    receive_store_order(created["store_order_id"], db, actor(manager))
+
+    counter = db.query(CounterInventory).one()
+    assert counter.quantity == 40 and counter.batch_id == batch.batch_id
+    assert db.query(StoreOrder).one().status == "received"
+    looked_up = lookup_counter_barcode("MILK-SERIAL-9", db, actor(manager))
+    assert looked_up["available_quantity"] == 40 and looked_up["product_name"] == "Milk"
+
+
+def test_cashier_checkout_splits_across_batches_and_creates_cashier_account(db):
+    from app.routers.cashiers import create_cashier, cashier_login, list_cashiers
+    from app.routers.counter import get_counter_sales
+    from app.schemas.store_order import CashierCreate, CashierLogin
+
+    warehouse, product, batch, inventory = seed_expiring_inventory(db)
+    batch.expiry_date = date.today() + timedelta(days=3)
+    batch.serial_number = "SPLIT-SERIAL"
+    later = Batch(product_id=product.product_id, serial_number="SPLIT-SERIAL", batch_number="SPLIT-2", manufacturing_date=date.today(), expiry_date=date.today() + timedelta(days=9))
+    db.add(later)
+    db.flush()
+    db.add_all([
+        CounterInventory(warehouse_id=warehouse.warehouse_id, product_id=product.product_id, batch_id=batch.batch_id, quantity=2, minimum_level=0, unit_price=2),
+        CounterInventory(warehouse_id=warehouse.warehouse_id, product_id=product.product_id, batch_id=later.batch_id, quantity=5, minimum_level=0, unit_price=2),
+    ])
+    db.commit()
+    manager = db.query(User).filter_by(role="manager").one()
+    manager_actor = {"user_id": manager.user_id, "username": manager.full_name, "role": manager.role, "warehouse_id": warehouse.warehouse_id}
+
+    created = create_cashier(CashierCreate(full_name="Till One"), db, manager_actor)
+    assert len(created["cashier_id"]) == 10 and created["cashier_id"].isdigit()
+    assert list_cashiers(db, manager_actor)["cashiers"][0]["cashier_id"] == created["cashier_id"]
+    with pytest.raises(HTTPException) as duplicate:
+        create_cashier(CashierCreate(full_name="Dup", cashier_id=created["cashier_id"]), db, manager_actor)
+    assert duplicate.value.status_code == 409
+
+    class FakeRequest:
+        client = type("Client", (), {"host": "test-host"})()
+
+    assert cashier_login(CashierLogin(cashier_id=created["cashier_id"]), FakeRequest(), db)["access_token"]
+    with pytest.raises(HTTPException) as bad_login:
+        cashier_login(CashierLogin(cashier_id="0000000000"), FakeRequest(), db)
+    assert bad_login.value.status_code == 401
+
+    cashier = db.query(User).filter_by(username=created["cashier_id"]).one()
+    cashier_actor = {"user_id": cashier.user_id, "username": cashier.full_name, "role": cashier.role, "warehouse_id": warehouse.warehouse_id}
+    sale = checkout(CheckoutCreate(items=[CheckoutItem(scanned_code="SPLIT-SERIAL", quantity=4)]), db, cashier_actor)
+
+    assert sale["total_amount"] == 8
+    assert sale["items"][0]["quantity"] == 4 and sale["cashier_name"] == "Till One"
+    assert sorted(row.quantity for row in db.query(CounterInventory).all()) == [0, 3]
+    assert db.query(CounterSaleItem).count() == 2
+    assert get_counter_sales(db, manager_actor)["sales"][0]["bill_number"] == sale["bill_number"]
+    with pytest.raises(HTTPException) as unknown:
+        checkout(CheckoutCreate(items=[CheckoutItem(scanned_code="NOPE", quantity=1)]), db, cashier_actor)
+    assert unknown.value.status_code == 404
+
+
+def test_worker_can_delete_own_account_and_email_is_freed(db):
+    from app.routers.users import remove_own_worker_account
+    from app.schemas.user import UserDelete
+
+    warehouse, *_ = seed_expiring_inventory(db)
+    worker = db.query(User).filter_by(role="warehouse_worker").one()
+    worker.email = "w@example.com"
+    worker.password_hash = hash_password("secret-pass")
+    db.add(RegistrationRequest(username="w", full_name="Worker", email="w@example.com", role="warehouse_worker", password_hash="x", warehouse_id=warehouse.warehouse_id, status="approved"))
+    db.commit()
+    actor = {"user_id": worker.user_id, "username": worker.full_name, "role": worker.role, "warehouse_id": warehouse.warehouse_id}
+
+    with pytest.raises(HTTPException) as wrong:
+        remove_own_worker_account(UserDelete(password="nope"), db, actor)
+    assert wrong.value.status_code == 401
+    remove_own_worker_account(UserDelete(password="secret-pass"), db, actor)
+
+    assert db.query(User).filter_by(email="w@example.com").count() == 0
+    assert db.query(RegistrationRequest).filter_by(email="w@example.com").count() == 0

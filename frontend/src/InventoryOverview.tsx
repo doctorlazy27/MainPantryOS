@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { createProduct, getDashboard, getExpiredInventory, getExpiringInventory, getInventory, getProducts, getTemperatureLogs, recordTemperature, updateBatchStatus, DashboardData, InventoryRecord, Product, Role, TemperatureLog } from './api'
+import { getDashboard, getExpiredInventory, getExpiringInventory, getInventory, getProducts, getTemperatureLogs, recordTemperature, updateBatchStatus, DashboardData, InventoryRecord, Product, Role, TemperatureLog } from './api'
 import AppSelect from './AppSelect'
 import { LoadingState } from './LoadingState'
 import { useLiveRefresh } from './useLiveRefresh'
@@ -14,7 +14,6 @@ export default function InventoryOverview({ role, onToast }: Props) {
   const [intelligence, setIntelligence] = useState<DashboardData['inventory_intelligence']>([])
   const [lowStock, setLowStock] = useState<DashboardData['low_stock_products']>([])
   const [temperatureLogs, setTemperatureLogs] = useState<TemperatureLog[]>([])
-  const [sku, setSku] = useState({ name: '', category: '', storage_section: '', aisle: '', shelf_number: '', unit: 'units', price: '', reorder_level: '0' })
   const [temperatureInputs, setTemperatureInputs] = useState<Record<number, string>>({})
   const [expiryFilter, setExpiryFilter] = useState<'all' | '7' | '3' | '1' | 'expired'>('all')
   const [sectionFilter, setSectionFilter] = useState('all')
@@ -67,16 +66,6 @@ export default function InventoryOverview({ role, onToast }: Props) {
     catch (error) { onToast(error instanceof Error ? error.message : 'Could not update batch status') }
   }
 
-  async function createSku(event: FormEvent) {
-    event.preventDefault()
-    try {
-      await createProduct({ name: sku.name.trim(), category: sku.category.trim(), storage_section: sku.storage_section.trim(), aisle: sku.aisle.trim(), shelf_number: sku.shelf_number.trim(), quantity: 0, unit: sku.unit.trim(), price: Number(sku.price), reorder_level: Number(sku.reorder_level) })
-      setSku({ name: '', category: '', storage_section: '', aisle: '', shelf_number: '', unit: 'units', price: '', reorder_level: '0' })
-      onToast('Product SKU added to the warehouse catalog')
-      await load()
-    } catch (error) { onToast(error instanceof Error ? error.message : 'Could not add product SKU') }
-  }
-
   async function submitTemperature(item: InventoryRecord) {
     const reading = Number(temperatureInputs[item.batch_id])
     if (!Number.isFinite(reading)) { onToast('Enter a valid temperature in Celsius'); return }
@@ -91,19 +80,23 @@ export default function InventoryOverview({ role, onToast }: Props) {
   return <>
     {role === 'warehouse_worker' && <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Cold-chain checks</p><h2>Record storage temperature</h2></div></div>{inventory.filter((item) => item.quantity > 0 && item.batch_status === 'active').map((item) => <form className="data-row compact" key={item.batch_id} onSubmit={(event) => { event.preventDefault(); void submitTemperature(item) }}><strong>{products.find((product) => product.product_id === item.product_id)?.name ?? `Product ${item.product_id}`} · {item.batch_number ?? `Batch ${item.batch_id}`}</strong><span>{item.storage_zone} · {item.location_code}</span><label>Temperature (C)<input type="number" step="0.1" required value={temperatureInputs[item.batch_id] ?? ''} onChange={(event) => setTemperatureInputs({ ...temperatureInputs, [item.batch_id]: event.target.value })} /></label><button className="row-action" type="submit">Record check</button></form>)}</section>}
     {role === 'manager' && <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Waste prevention</p><h2>Donation candidates</h2></div></div>{visibleExpiring.length ? visibleExpiring.map((item) => { const inventoryItem = inventory.find((record) => record.inventory_id === item.inventory_id); return <div className="data-row compact" key={item.inventory_id}><strong>{item.product_name} · {item.batch_number}</strong><span>{item.quantity} units</span><span>Expires in {item.days_remaining} days</span>{inventoryItem && inventoryItem.batch_status === 'active' && <button className="row-action" onClick={() => void setLotStatus(inventoryItem, 'donated')}>Record donation</button>}</div> }) : <p className="field-hint">No batches are approaching expiry within the selected window.</p>}</section>}
-    {role === 'manager' && <section className="panel workflow-card"><details><summary className="table-toolbar"><span><p className="eyebrow">Catalog control</p><strong>Add product SKU</strong></span></summary><form className="form-grid" onSubmit={(event) => void createSku(event)}><label>Product name<input required value={sku.name} onChange={(event) => setSku({ ...sku, name: event.target.value })} /></label><label>Category<input required value={sku.category} onChange={(event) => setSku({ ...sku, category: event.target.value })} /></label><label>Storage section<input required value={sku.storage_section} onChange={(event) => setSku({ ...sku, storage_section: event.target.value })} /></label><label>Aisle<input required value={sku.aisle} onChange={(event) => setSku({ ...sku, aisle: event.target.value })} /></label><label>Shelf<input required value={sku.shelf_number} onChange={(event) => setSku({ ...sku, shelf_number: event.target.value })} /></label><label>Unit<input required value={sku.unit} onChange={(event) => setSku({ ...sku, unit: event.target.value })} /></label><label>Unit price<input required type="number" min="0" step="0.01" value={sku.price} onChange={(event) => setSku({ ...sku, price: event.target.value })} /></label><label>Reorder level<input required type="number" min="0" value={sku.reorder_level} onChange={(event) => setSku({ ...sku, reorder_level: event.target.value })} /></label><button className="button primary" type="submit">Add SKU</button></form></details></section>}
     <section className="panel low-stock-panel"><div className="table-toolbar"><div><p className="eyebrow">Replenishment queue</p><h2>Low stock</h2></div><span className="table-count">{lowStock.length} products need attention</span></div>{lowStock.length ? <div className="low-stock-list">{lowStock.map((item) => <div className="low-stock-item" key={item.product_id}><div><strong>{item.name}</strong><span>{item.current_quantity} {item.unit} available · reorder at {item.reorder_level}</span></div><span className="pill urgent">REFILL</span></div>)}</div> : <p className="field-hint">All tracked products are above their reorder level.</p>}</section>
     <section className="panel data-panel">
       <div className="table-toolbar"><div><p className="eyebrow">Warehouse inventory</p><h2>Food sections</h2></div><div className="module-actions"><AppSelect value={sectionFilter} onChange={(event) => setSectionFilter(event.target.value)} aria-label="Filter inventory section"><option value="all">All sections</option>{sections.map((section) => <option key={section} value={section}>{section}</option>)}</AppSelect><button className="button subtle" onClick={() => void load()}>Refresh</button></div></div>
       {role === 'warehouse_worker' && <p className="field-hint">Stock is grouped by food section. Submit an inventory request below to add boxed units.</p>}
       {visibleRows.length ? <div className="inventory-sections">{sections.filter((section) => sectionFilter === 'all' || section === sectionFilter).map((section) => <section className="inventory-section" key={section}>
         <h3>{section}</h3>
-        <div className="data-table"><div className="data-head"><span>Product</span><span>Aisle</span><span>Shelf</span><span>Units</span><span>Boxed units</span><span>Stock</span><span>Expiry</span><span>Per-unit cost</span><span>Total box cost</span><span>Box IDs</span></div>
+        <div className="data-table"><div className="data-head"><span>Product</span><span>Aisle</span><span>Shelf</span><span>Units</span><span>Boxed units</span><span>Stock</span><span>Expiry</span><span>Per-unit cost</span><span>Total box cost</span><span>Serial number</span></div>
           {visibleRows.filter(({ product }) => (product.storage_section || product.category) === section).sort((left, right) => `${left.product.aisle} ${left.product.shelf_number} ${left.product.name}`.localeCompare(`${right.product.aisle} ${right.product.shelf_number} ${right.product.name}`)).map(({ product, stock, boxes, unitCost, boxCost, nearestDays, stockStatus }) => <div className="data-row" key={product.product_id}>
-            <strong>{product.name}</strong><span>{product.aisle || 'Unassigned'}</span><span>{product.shelf_number || 'Unassigned'}</span><span>{stock} {product.unit}</span><span>{boxes}</span><span>{stockStatus}</span><span>{nearestDays === null ? 'ACTIVE' : `${nearestDays} days`}</span><span>${Number(unitCost).toFixed(2)}</span><span>${Number(boxCost).toFixed(2)}</span><span>{inventory.filter((item) => item.product_id === product.product_id).reduce((total, item) => total + item.boxed_unit_ids.length, 0)} generated</span>
+            <strong>{product.name}</strong><span>{product.aisle || 'Unassigned'}</span><span>{product.shelf_number || 'Unassigned'}</span><span>{stock} {product.unit}</span><span>{boxes}</span><span>{stockStatus}</span><span>{nearestDays === null ? 'ACTIVE' : `${nearestDays} days`}</span><span>${Number(unitCost).toFixed(2)}</span><span>${Number(boxCost).toFixed(2)}</span><span>{product.serial_number ?? 'Not registered'}</span>
           </div>)}
         </div>
       </section>)}</div> : <p className="field-hint">No products have been added yet.</p>}
+    </section>
+
+    <section className="panel data-panel">
+      <div className="table-toolbar"><div><p className="eyebrow">Registered stock</p><h2>Batches by serial number</h2></div></div>
+      {inventory.some((item) => item.quantity > 0) ? <div className="data-table"><div className="data-head"><span>Product</span><span>Serial number</span><span>Batch</span><span>Quantity</span><span>Location</span></div>{inventory.filter((item) => item.quantity > 0).map((item) => <div className="data-row" key={item.inventory_id}><strong>{products.find((product) => product.product_id === item.product_id)?.name ?? `Product ${item.product_id}`}</strong><span>{item.serial_number ?? 'Not registered'}</span><span>{item.batch_number ?? `Batch ${item.batch_id}`}</span><span>{item.quantity}</span><span>{item.location_code ?? 'Unassigned'}</span></div>)}</div> : <p className="field-hint">No stock has been registered yet.</p>}
     </section>
 
     <section className="panel data-panel">

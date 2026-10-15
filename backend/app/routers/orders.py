@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+﻿from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -58,120 +58,6 @@ def _fefo_plan(db: Session, product_id: int, warehouse_id: int, quantity: int, l
         if remaining == 0:
             break
     return plan
-
-
-@router.get("/warehouse-requests")
-def list_warehouse_requests(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("view_orders")),
-):
-    query = db.query(WarehouseRequest).filter(WarehouseRequest.warehouse_id == current_user.get("warehouse_id"))
-    rows = query.order_by(WarehouseRequest.created_at.desc()).all()
-    return {
-        "requests": [
-            {
-                "request_id": item.request_id,
-                "product_id": item.product_id,
-                "product_name": db.query(Product.name).filter(Product.product_id == item.product_id).scalar(),
-                "quantity": item.quantity,
-                "status": item.status,
-                "requested_by": item.requested_by,
-                "created_at": item.created_at,
-            }
-            for item in rows
-        ]
-    }
-
-
-@router.post("/warehouse-requests")
-def request_warehouse_stock(
-    request: WarehouseRequestCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("request_warehouse_stock")),
-):
-    if db.query(Product).filter(Product.product_id == request.product_id).first() is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-    item = WarehouseRequest(product_id=request.product_id, quantity=request.quantity, warehouse_id=current_user.get("warehouse_id"), requested_by=current_user["user_id"])
-    db.add(item)
-    db.flush()
-    notify_roles(db, {"warehouse_worker"}, "Warehouse stock request", f"Stock request #{item.request_id} needs action.", "warehouse_stock_request", current_user.get("warehouse_id"))
-    db.commit()
-    return {"message": "Stock request sent to warehouse", "request_id": item.request_id, "status": item.status}
-
-
-@router.patch("/warehouse-requests/{request_id}/approve")
-def approve_warehouse_request(
-    request_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("process_stock_requests")),
-):
-    item = db.query(WarehouseRequest).filter(WarehouseRequest.request_id == request_id, WarehouseRequest.warehouse_id == current_user.get("warehouse_id"), WarehouseRequest.status == "pending").with_for_update().first()
-    if item is None:
-        raise HTTPException(status_code=404, detail="Pending stock request not found")
-    inventory_rows = db.query(Inventory).join(Batch, Inventory.batch_id == Batch.batch_id).filter(Inventory.product_id == item.product_id, Inventory.warehouse_id == item.warehouse_id, Inventory.quantity > 0, Inventory.putaway_status == "confirmed", Batch.status == "active", Batch.expiry_date > date.today()).order_by(Batch.expiry_date.asc()).with_for_update().all()
-    if sum(available_quantity(db, row) for row in inventory_rows) < item.quantity:
-        raise HTTPException(status_code=400, detail="Insufficient unexpired warehouse inventory")
-    remaining = item.quantity
-    product = db.query(Product).filter(Product.product_id == item.product_id).first()
-    for inventory in inventory_rows:
-        deduction = min(available_quantity(db, inventory), remaining)
-        inventory.quantity -= deduction
-        counter_inventory = db.query(CounterInventory).filter(
-            CounterInventory.warehouse_id == item.warehouse_id,
-            CounterInventory.product_id == item.product_id,
-            CounterInventory.batch_id == inventory.batch_id,
-        ).with_for_update().first()
-        if counter_inventory is None:
-            counter_inventory = CounterInventory(
-                warehouse_id=item.warehouse_id,
-                product_id=item.product_id,
-                batch_id=inventory.batch_id,
-                quantity=deduction,
-                minimum_level=product.reorder_level if product else 0,
-                unit_price=product.price if product else 0,
-                last_replenished_at=datetime.utcnow(),
-            )
-            db.add(counter_inventory)
-        else:
-            counter_inventory.quantity += deduction
-            counter_inventory.last_replenished_at = datetime.utcnow()
-        db.add(InventoryMovement(
-            inventory_id=inventory.inventory_id,
-            product_id=inventory.product_id,
-            batch_id=inventory.batch_id,
-            warehouse_id=inventory.warehouse_id,
-            movement_type="TRANSFER_TO_COUNTER",
-            quantity=deduction,
-            actor_id=current_user["user_id"],
-            actor_name=current_user["username"],
-            reason=f"Warehouse request #{item.request_id} transferred to counter using FEFO.",
-        ))
-        remaining -= deduction
-        if remaining == 0:
-            break
-    item.status = "approved"
-    item.approved_by = current_user["user_id"]
-    item.approved_at = datetime.utcnow()
-    create_notification(db, item.requested_by, "Stock request fulfilled", f"Request #{item.request_id} was transferred to counter inventory.", "warehouse_stock_approved")
-    db.commit()
-    return {"message": "Stock request approved", "request_id": request_id, "status": item.status}
-
-
-@router.patch("/warehouse-requests/{request_id}/reject")
-def reject_warehouse_request(
-    request_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(require_permission("process_stock_requests")),
-):
-    item = db.query(WarehouseRequest).filter(WarehouseRequest.request_id == request_id, WarehouseRequest.warehouse_id == current_user.get("warehouse_id"), WarehouseRequest.status == "pending").with_for_update().first()
-    if item is None:
-        raise HTTPException(status_code=404, detail="Pending stock request not found")
-    item.status = "rejected"
-    item.approved_by = current_user["user_id"]
-    item.approved_at = datetime.utcnow()
-    create_notification(db, item.requested_by, "Stock request rejected", f"Request #{item.request_id} was rejected.", "warehouse_stock_rejected")
-    db.commit()
-    return {"message": "Stock request rejected", "request_id": request_id, "status": item.status}
 
 
 @router.get("/")
@@ -568,7 +454,7 @@ def scan_order_pick(
             Inventory.quantity > 0,
             Batch.status == "active",
             Batch.expiry_date > date.today(),
-            Batch.batch_number == scan.scanned_code,
+            (Batch.batch_number == scan.scanned_code) | (Batch.serial_number == scan.scanned_code),
         ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().first()
         if match is not None:
             inventory, batch = match

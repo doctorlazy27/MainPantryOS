@@ -7,29 +7,31 @@ import AuthAccess from './AuthAccess'
 import ReceiptPanel from './ReceiptPanel'
 import InvoicePanel from './InvoicePanel'
 import ManagerInvoiceSendPanel from './ManagerInvoiceSendPanel'
-import ReceivingPanel from './ReceivingPanel'
 import InventoryPanel from './InventoryOverview'
 import InventoryRequestsPanel from './InventoryRequestsPanel'
-import StockRequestPanel from './StockRequestPanel'
+import StoreOrdersPanel from './StoreOrdersPanel'
+import CounterAccountsPanel from './CounterAccountsPanel'
+import CounterSalesPanel from './CounterSalesPanel'
+import CashierApp from './CashierApp'
+import DeleteAccountPanel from './DeleteAccountPanel'
+import BarcodeReductionPanel from './BarcodeReductionPanel'
 import SalesOrderPanel from './SalesOrderPanel'
 import WorkerOrderPanel from './WorkerOrderPanel'
-import ReorderPanel from './ReorderPanel'
 import OperationsReportPanel from './OperationsReportPanel'
 import ColdChainDashboardPanel from './ColdChainDashboardPanel'
 import TransferPanel from './TransferPanel'
 import WarehouseOverview from './WarehouseOverview'
-import CheckoutPanel from './CheckoutPanel'
 import CounterStockPanel from './CounterStockPanel'
 import AIHelpPanel from './AIHelpPanel'
 import { CopilotSidebar, ExpiryWastePanel, ReportsPanel, SettingsPanel } from './WarehouseModules'
-import { NativeAppEffects } from './MobilePrimitives'
+import { NativeAppEffects, TableLabels } from './MobilePrimitives'
 import NetworkActivityEffects from './NetworkActivityEffects'
 import { markNotificationRead } from './api'
 import { AlertTriangle, ArrowDownToLine, ArrowRight, ArrowUpRight, Barcode as BarcodeIcon, Bell, Bot as BotIcon, Boxes, CheckCircle2, ClipboardList, LayoutDashboard, LogOut, Menu, PackageCheck, PackageSearch, RefreshCw, Store as StoreIcon, Truck, UserRound, Users, X } from 'lucide-react'
 import { approveRegistration, AuthUser, deleteUser, getCurrentUser, getNotifications, getRegistrationRequests, getUsers, logout, Notification, Role, rejectRegistration, User } from './api'
 
-type View = 'Overview' | 'Orders' | 'Invoices' | 'Stock Requests' | 'Inventory' | 'Scanner' | 'Receiving' | 'Counter Stock' | 'Transfers' | 'Expiry & Waste' | 'Reorder' | 'Reports' | 'AI Copilot' | 'Notifications' | 'Team' | 'Settings'
-const roleName: Record<Role, string> = { manager: 'Manager', warehouse_worker: 'Warehouse worker' }
+type View = 'Overview' | 'Orders' | 'Invoices' | 'Store Orders' | 'Inventory' | 'Scanner' | 'Counter Stock' | 'Counter Accounts' | 'Account' | 'Transfers' | 'Expiry & Waste' | 'Reports' | 'AI Copilot' | 'Notifications' | 'Team' | 'Settings'
+const roleName: Record<Role, string> = { manager: 'Manager', warehouse_worker: 'Warehouse worker', cashier: 'Cashier' }
 
 function App() {
   const [user, setUser] = useState<AuthUser | null>(null); const [checking, setChecking] = useState(true); const [view, setView] = useState<View>('Overview'); const [toast, setToast] = useState(''); const [menu, setMenu] = useState(false); const [confirmSignout, setConfirmSignout] = useState(false)
@@ -41,6 +43,7 @@ function App() {
   useEffect(() => { let handle: { remove: () => Promise<void> } | undefined; void CapacitorApp.addListener('backButton', ({ canGoBack }) => { if (menu || document.querySelector('.mobile-more-sheet.is-open, .copilot-drawer-scrim')) { setMenu(false); window.dispatchEvent(new Event('pantryos:close-overlays')); return }; if (canGoBack) window.history.back(); else void CapacitorApp.exitApp() }).then((listener) => { handle = listener }); return () => { void handle?.remove() } }, [menu])
   if (checking) return <div className="auth-loading"><PackageCheck size={27} /><span>Connecting to PantryOS...</span></div>
   if (!user) return <AuthAccess onLogin={setUser} />
+  if (user.role === 'cashier') return <CashierApp user={user} onSignOut={() => setUser(null)} />
   const allowed = navigationFor(user.role); const activeView = allowed.some((item) => item.id === view) ? view : allowed[0].id
   const navigate = (next: View) => { setView(next); setMenu(false) }
   return <div className="app-shell"><aside className={`sidebar ${menu ? 'is-open' : ''}`}><div className="brand"><div className="brand-mark"><PackageCheck size={19} /></div><div><strong>PantryOS</strong><span>Food warehouse</span></div></div><nav className="main-nav"><p className="nav-caption">Operations</p>{allowed.map((item) => <button className={`nav-item ${activeView === item.id ? 'active' : ''}`} key={item.id} onClick={() => navigate(item.id)}><item.icon size={18} /><span>{item.label}</span></button>)}</nav><div className="sidebar-footer"><div className="support-icon"><UserRound size={13} /></div><div><strong>{user.username}</strong><span>{roleName[user.role]}</span></div><button className="logout-button" onClick={() => setConfirmSignout(true)} aria-label="Sign out" title="Sign out"><LogOut size={15} /></button></div></aside><main className="main-content"><header className="topbar"><button className="icon-button mobile-menu" onClick={() => setMenu(!menu)} aria-label="Open menu"><Menu size={19} /></button><div className="breadcrumbs"><strong>{activeView}</strong></div><div className="top-actions"><button className="icon-button" onClick={() => navigate('Notifications')} aria-label="Notifications"><Bell size={19} /></button><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div></div></header><div className="page-wrap"><Workspace view={activeView} role={user.role} onToast={setToast} onNavigate={navigate} /><footer className="page-footer"><span>PantryOS · {roleName[user.role]} access</span><span>Connected to backend API</span></footer></div></main>{confirmSignout && <ConfirmDialog title="Sign out of PantryOS?" text="You will return to the login screen. Your account and saved data will remain unchanged." onCancel={() => setConfirmSignout(false)} onConfirm={() => { logout(); setUser(null); setConfirmSignout(false) }} />}{toast && <div className="toast"><CheckCircle2 size={17} />{toast}<button onClick={() => setToast('')} aria-label="Dismiss"><X size={14} /></button></div>}</div>
@@ -50,39 +53,38 @@ function navigationFor(role: Role) {
   const overview = { id: 'Overview' as View, label: 'Dashboard', icon: LayoutDashboard }
   const orders = { id: 'Orders' as View, label: 'Orders', icon: ClipboardList }
   const invoices = { id: 'Invoices' as View, label: 'Invoices', icon: ArrowUpRight }
-  const stockRequests = { id: 'Stock Requests' as View, label: 'Stock requests', icon: PackageSearch }
+  const stockRequests = { id: 'Store Orders' as View, label: 'Store orders', icon: PackageSearch }
   const inventory = { id: 'Inventory' as View, label: 'Inventory', icon: Boxes }
   const scanner = { id: 'Scanner' as View, label: 'Scanner', icon: BarcodeIcon }
-  const receiving = { id: 'Receiving' as View, label: 'Receiving', icon: ArrowDownToLine }
   const counter = { id: 'Counter Stock' as View, label: 'Counter Stock', icon: StoreIcon }
   const transfers = { id: 'Transfers' as View, label: 'Transfers', icon: Truck }
   const aiCopilot = { id: 'AI Copilot' as View, label: 'AI Help', icon: BotIcon }
   const expiry = { id: 'Expiry & Waste' as View, label: 'Expiry & Waste', icon: AlertTriangle }
   const notifications = { id: 'Notifications' as View, label: 'Notifications', icon: Bell }
-  const base = [overview, orders, scanner, inventory, receiving, expiry, notifications]
-  if (role === 'manager') return [...base, stockRequests, invoices, transfers, counter, { id: 'Reorder' as View, label: 'Reorder', icon: RefreshCw }, { id: 'Reports' as View, label: 'Reports', icon: ClipboardList }, aiCopilot, { id: 'Team' as View, label: 'Team', icon: Users }, { id: 'Settings' as View, label: 'Settings', icon: Users }]
-  return [...base, stockRequests, aiCopilot]
+  const base = [overview, orders, inventory, expiry, notifications]
+  if (role === 'manager') return [...base, stockRequests, counter, invoices, transfers, { id: 'Counter Accounts' as View, label: 'Counter accounts', icon: UserRound }, { id: 'Reports' as View, label: 'Reports', icon: ClipboardList }, aiCopilot, { id: 'Team' as View, label: 'Team', icon: Users }, { id: 'Settings' as View, label: 'Settings', icon: Users }]
+  return [...base, scanner, stockRequests, aiCopilot, { id: 'Account' as View, label: 'My account', icon: UserRound }]
 }
-function Workspace({ view, role, onToast, onNavigate }: { view: View; role: Role; onToast: (message: string) => void; onNavigate: (view: View) => void }) { return <><NativeAppEffects /><NetworkActivityEffects /><MobileNavigation view={view} role={role} onNavigate={onNavigate} /><CopilotSidebar onToast={onToast} /><WorkspaceContent view={view} role={role} onToast={onToast} onNavigate={onNavigate} /></> }
+function Workspace({ view, role, onToast, onNavigate }: { view: View; role: Role; onToast: (message: string) => void; onNavigate: (view: View) => void }) { return <><NativeAppEffects /><TableLabels /><NetworkActivityEffects /><MobileNavigation view={view} role={role} onNavigate={onNavigate} /><CopilotSidebar onToast={onToast} /><WorkspaceContent view={view} role={role} onToast={onToast} onNavigate={onNavigate} /></> }
 function WorkspaceContent({ view, role, onToast, onNavigate }: { view: View; role: Role; onToast: (message: string) => void; onNavigate: (view: View) => void }) {
   if (view === 'Overview') return <><WarehouseOverview onNavigate={onNavigate} />{role === 'manager' && <ColdChainDashboardPanel onToast={onToast} onNavigate={onNavigate} />}</>
   if (view === 'Orders') return <>{role === 'manager' ? <><OrderCreation onToast={onToast} /><SalesOrderPanel role={role} onToast={onToast} /><ReceiptPanel onToast={onToast} /></> : <WorkerOrderPanel onToast={onToast} />}</>
-  if (view === 'Invoices') return <><InvoicePanel role={role} onToast={onToast} />{role === 'manager' && <ManagerInvoiceSendPanel onToast={onToast} />}</>
-  if (view === 'Stock Requests') return <StockRequestPanel role={role} onToast={onToast} />
+  if (view === 'Invoices') return <><InvoicePanel role={role} onToast={onToast} />{role === 'manager' && <><ManagerInvoiceSendPanel onToast={onToast} /><CounterSalesPanel onToast={onToast} /></>}</>
+  if (view === 'Store Orders') return <StoreOrdersPanel role={role} onToast={onToast} />
   if (view === 'Inventory') return <><InventoryPanel onToast={onToast} role={role} /><InventoryRequestsPanel onToast={onToast} role={role} /></>
-  if (view === 'Scanner') return <CheckoutPanel onToast={onToast} />
-  if (view === 'Receiving') return <ReceivingPanel onToast={onToast} role={role} />
+  if (view === 'Scanner') return <BarcodeReductionPanel onToast={onToast} onReduced={() => undefined} />
   if (view === 'Counter Stock') return <CounterStockPanel onToast={onToast} role={role} />
+  if (view === 'Account') return <DeleteAccountPanel onToast={onToast} onDeleted={() => { logout(); window.location.reload() }} />
+  if (view === 'Counter Accounts') return <CounterAccountsPanel onToast={onToast} />
   if (view === 'Transfers') return <TransferPanel role={role} onToast={onToast} />
   if (view === 'Expiry & Waste') return <ExpiryWastePanel onToast={onToast} role={role} />
-  if (view === 'Reorder') return <ReorderPanel onToast={onToast} />
   if (view === 'Reports') return <><OperationsReportPanel onToast={onToast} /><ReportsPanel onToast={onToast} role={role} /></>
   if (view === 'AI Copilot') return <AIHelpPanel onToast={onToast} role={role} />
   if (view === 'Settings') return <SettingsPanel />
   if (view === 'Team') return <><TeamManagement onToast={onToast} /><RegistrationRequests onToast={onToast} /></>
   return <><MessagingPanel role={role} /><NotificationsInteractive /></>
 }
-function MobileNavigation({ view, role, onNavigate }: { view: View; role: Role; onNavigate: (view: View) => void }) { const [moreOpen, setMoreOpen] = useState(false); useEffect(() => { const close = () => setMoreOpen(false); window.addEventListener('pantryos:close-overlays', close); return () => window.removeEventListener('pantryos:close-overlays', close) }, []); const allowed = navigationFor(role); const primary = allowed.filter((item) => ['Overview', 'Inventory', 'Scanner'].includes(item.id)).slice(0, 3); const more = allowed.filter((item) => !primary.some((primaryItem) => primaryItem.id === item.id)); const go = (next: View) => { setMoreOpen(false); onNavigate(next) }; return <><div className={`mobile-more-scrim ${moreOpen ? 'is-visible' : ''}`} onClick={() => setMoreOpen(false)} /><div className={`mobile-more-sheet ${moreOpen ? 'is-open' : ''}`} role="dialog" aria-label="More warehouse modules"><div className="sheet-title"><strong>Warehouse modules</strong><button className="icon-button" aria-label="Close menu" onClick={() => setMoreOpen(false)}><X size={19} /></button></div>{more.map((item) => <button className={`sheet-item ${view === item.id ? 'active' : ''}`} key={item.id} onClick={() => go(item.id)}><item.icon size={19} /><span>{item.label}</span><ArrowRight size={16} /></button>)}</div><nav className="mobile-bottom-nav" aria-label="Primary navigation">{primary.map((item) => <button className={view === item.id ? 'active' : ''} key={item.id} onClick={() => go(item.id)}><item.icon size={20} /><span>{item.label === 'Dashboard' ? 'Home' : item.label}</span></button>)}<button className={moreOpen ? 'active' : ''} onClick={() => setMoreOpen((open) => !open)}><Menu size={20} /><span>More</span></button></nav></> }
+function MobileNavigation({ view, role, onNavigate }: { view: View; role: Role; onNavigate: (view: View) => void }) { const [moreOpen, setMoreOpen] = useState(false); useEffect(() => { const close = () => setMoreOpen(false); window.addEventListener('pantryos:close-overlays', close); return () => window.removeEventListener('pantryos:close-overlays', close) }, []); const allowed = navigationFor(role); const primary = allowed.filter((item) => ['Overview', 'Inventory', 'Store Orders'].includes(item.id)).slice(0, 3); const more = allowed.filter((item) => !primary.some((primaryItem) => primaryItem.id === item.id)); const go = (next: View) => { setMoreOpen(false); onNavigate(next) }; return <><div className={`mobile-more-scrim ${moreOpen ? 'is-visible' : ''}`} onClick={() => setMoreOpen(false)} /><div className={`mobile-more-sheet ${moreOpen ? 'is-open' : ''}`} role="dialog" aria-label="More warehouse modules"><div className="sheet-title"><strong>Warehouse modules</strong><button className="icon-button" aria-label="Close menu" onClick={() => setMoreOpen(false)}><X size={19} /></button></div>{more.map((item) => <button className={`sheet-item ${view === item.id ? 'active' : ''}`} key={item.id} onClick={() => go(item.id)}><item.icon size={19} /><span>{item.label}</span><ArrowRight size={16} /></button>)}</div><nav className="mobile-bottom-nav" aria-label="Primary navigation">{primary.map((item) => <button className={view === item.id ? 'active' : ''} key={item.id} onClick={() => go(item.id)}><item.icon size={20} /><span>{item.label === 'Dashboard' ? 'Home' : item.label}</span></button>)}<button className={moreOpen ? 'active' : ''} onClick={() => setMoreOpen((open) => !open)}><Menu size={20} /><span>More</span></button></nav></> }
 function Header({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <section className="module-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></div>{action && <div className="module-actions">{action}</div>}</section> }
 function Button({ children, onClick, variant = 'primary', type = 'button' }: { children: ReactNode; onClick?: () => void; variant?: 'primary' | 'subtle'; type?: 'button' | 'submit' }) { return <button className={`button ${variant}`} type={type} onClick={onClick}>{children}</button> }
 function Field({ label, children }: { label: string; children: ReactNode }) { return <label>{label}{children}</label> }

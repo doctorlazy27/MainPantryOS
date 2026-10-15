@@ -13,6 +13,7 @@ from app.models.order import SalesOrder
 from app.models.order_item import SalesOrderItem
 from app.models.product import Product
 from app.models.purchase_order import PurchaseOrder
+from app.models.inventory_addition_request import InventoryAdditionRequest
 from app.services.expiry import process_expiry
 from app.services.intelligence import calculate_inventory_intelligence
 
@@ -45,9 +46,9 @@ def get_dashboard(
         SalesOrder.warehouse_id == warehouse_id,
     ).count()
 
-    pending_purchase_orders = db.query(PurchaseOrder).filter(
-        PurchaseOrder.status == "pending",
-        PurchaseOrder.warehouse_id == warehouse_id,
+    pending_purchase_orders = db.query(InventoryAdditionRequest).filter(
+        InventoryAdditionRequest.status.in_(["pending", "approved"]),
+        InventoryAdditionRequest.warehouse_id == warehouse_id,
     ).count()
 
     unread_notifications = db.query(Notification).filter(

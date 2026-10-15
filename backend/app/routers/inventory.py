@@ -21,7 +21,8 @@ from app.models.order import SalesOrder
 from app.models.order_item import SalesOrderItem
 from app.models.order_inventory_reservation import OrderInventoryReservation
 from app.schemas.inventory_addition_request import InventoryAdditionRequestCreate
-from app.schemas.inventory_addition_approval import InventoryAdditionApproval
+from app.schemas.inventory_addition_approval import InventoryReceiptDetails
+from app.services.serial import register_product_serial
 from app.schemas.inventory_scan import InventoryScan
 from app.schemas.warehouse_workflow import BatchStatusUpdate, PutawayConfirm, TemperatureCheckCreate
 from app.services.activity import log_activity
@@ -272,8 +273,6 @@ def list_addition_requests(
     query = db.query(InventoryAdditionRequest).filter(
         InventoryAdditionRequest.warehouse_id == current_user.get("warehouse_id")
     )
-    if current_user["role"] == "warehouse_worker":
-        query = query.filter(InventoryAdditionRequest.requested_by == current_user["user_id"])
     rows = query.order_by(InventoryAdditionRequest.created_at.desc()).all()
     return {
         "requests": [
@@ -281,12 +280,18 @@ def list_addition_requests(
                 "request_id": item.request_id,
                 "product_id": item.product_id,
                 "product_name": db.query(Product.name).filter(Product.product_id == item.product_id).scalar(),
+                "category": item.category,
                 "quantity": item.quantity,
                 "boxed_units": item.boxed_units,
+                "units_per_box": item.units_per_box,
+                "unit_price": item.unit_price,
                 "batch_number": db.query(Batch.batch_number).filter(Batch.batch_id == item.batch_id).scalar(),
+                "serial_number": item.serial_number,
                 "status": item.status,
                 "requested_by": item.requested_by,
                 "created_at": item.created_at,
+                "reviewed_at": item.reviewed_at,
+                "received_at": item.received_at,
             }
             for item in rows
         ]
@@ -316,7 +321,6 @@ def request_inventory_addition(
         units_per_box=request.units_per_box,
         unit_price=request.unit_price,
         box_unit_cost=request.box_unit_cost or request.unit_price * request.units_per_box,
-        scanned_code=request.scanned_codes[0] if request.scanned_codes else None,
         requested_by=current_user["user_id"],
     )
     db.add(item)
@@ -329,7 +333,6 @@ def request_inventory_addition(
 @router.patch("/addition-requests/{request_id}/approve")
 def approve_inventory_addition(
     request_id: int,
-    approval: InventoryAdditionApproval,
     db: Session = Depends(get_db),
     current_user: dict = Depends(require_permission("approve_inventory_requests")),
 ):
@@ -340,6 +343,29 @@ def approve_inventory_addition(
     ).with_for_update().first()
     if item is None:
         raise HTTPException(status_code=404, detail="Pending inventory request not found")
+    item.status = "approved"
+    item.reviewed_by = current_user["user_id"]
+    item.reviewed_at = datetime.utcnow()
+    create_notification(db, item.requested_by, "Inventory request approved", f"Inventory request #{item.request_id} was approved. Record the delivery details once the product has been received.", "inventory_request_approved")
+    log_activity(db, current_user["user_id"], current_user["username"], "INVENTORY_REQUEST_APPROVED", f"Approved inventory addition request #{item.request_id}.")
+    db.commit()
+    return {"message": "Inventory addition approved", "request_id": request_id, "status": item.status}
+
+
+@router.patch("/addition-requests/{request_id}/receive")
+def receive_inventory_addition(
+    request_id: int,
+    approval: InventoryReceiptDetails,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_permission("submit_inventory_requests")),
+):
+    item = db.query(InventoryAdditionRequest).filter(
+        InventoryAdditionRequest.request_id == request_id,
+        InventoryAdditionRequest.warehouse_id == current_user.get("warehouse_id"),
+        InventoryAdditionRequest.status == "approved",
+    ).with_for_update().first()
+    if item is None:
+        raise HTTPException(status_code=404, detail="Manager-approved inventory request not found")
     if approval.expiry_date <= approval.manufacturing_date:
         raise HTTPException(status_code=400, detail="Expiry date must be after manufacturing date")
     if approval.expiry_date <= date.today():
@@ -349,10 +375,14 @@ def approve_inventory_addition(
     product = db.query(Product).filter(Product.product_id == item.product_id).first()
     if product is None:
         raise HTTPException(status_code=404, detail="Requested product not found")
-    product.aisle = approval.aisle
-    product.shelf_number = approval.shelf_number
+    serial = register_product_serial(db, product, approval.serial_number)
+    if db.query(Batch.batch_id).filter(Batch.batch_number == approval.batch_number.strip(), Batch.batch_id != (item.batch_id or 0)).first():
+        raise HTTPException(status_code=409, detail=f"Batch number {approval.batch_number.strip()} already exists")
+    product.aisle = approval.aisle.strip()
+    product.shelf_number = approval.shelf_number.strip()
+    shelf_location = f"{product.aisle}-{product.shelf_number}".upper()
     if item.batch_id is None:
-        batch = Batch(product_id=item.product_id, batch_number=approval.batch_number.strip(), manufacturing_date=approval.manufacturing_date, expiry_date=approval.expiry_date, status="active" if passed_qc else "quarantined")
+        batch = Batch(product_id=item.product_id, serial_number=serial, batch_number=approval.batch_number.strip(), manufacturing_date=approval.manufacturing_date, expiry_date=approval.expiry_date, status="active" if passed_qc else "quarantined")
         db.add(batch)
         db.flush()
         item.batch_id = batch.batch_id
@@ -360,6 +390,7 @@ def approve_inventory_addition(
         batch = db.query(Batch).filter(Batch.batch_id == item.batch_id).with_for_update().first()
         if batch is None:
             raise HTTPException(status_code=404, detail="Requested batch not found")
+        batch.serial_number = serial
         batch.batch_number = approval.batch_number.strip()
         batch.manufacturing_date = approval.manufacturing_date
         batch.expiry_date = approval.expiry_date
@@ -376,9 +407,9 @@ def approve_inventory_addition(
         existing.boxed_units += item.boxed_units
         existing.total_box_cost += item.boxed_units * (item.box_unit_cost or item.unit_price * item.units_per_box)
         existing.storage_zone = approval.storage_zone
-        existing.location_code = "STAGING" if passed_qc else "QUARANTINE"
-        existing.putaway_status = "pending" if passed_qc and batch.status == "active" else "hold"
-        create_boxed_units(db, existing.inventory_id, item.boxed_units, item.units_per_box, item.unit_price, [item.scanned_code] if item.scanned_code else None)
+        existing.location_code = shelf_location if passed_qc else "QUARANTINE"
+        existing.putaway_status = "confirmed" if passed_qc and batch.status == "active" else "hold"
+        create_boxed_units(db, existing.inventory_id, item.boxed_units, item.units_per_box, item.unit_price)
         db.add(InventoryMovement(
             inventory_id=existing.inventory_id,
             product_id=existing.product_id,
@@ -403,12 +434,12 @@ def approve_inventory_addition(
             box_unit_cost=box_cost,
             total_box_cost=item.boxed_units * box_cost,
             storage_zone=approval.storage_zone,
-            location_code="STAGING" if passed_qc else "QUARANTINE",
-            putaway_status="pending" if passed_qc and batch.status == "active" else "hold",
+            location_code=shelf_location if passed_qc else "QUARANTINE",
+            putaway_status="confirmed" if passed_qc and batch.status == "active" else "hold",
         )
         db.add(inventory)
         db.flush()
-        create_boxed_units(db, inventory.inventory_id, item.boxed_units, item.units_per_box, item.unit_price, [item.scanned_code] if item.scanned_code else None)
+        create_boxed_units(db, inventory.inventory_id, item.boxed_units, item.units_per_box, item.unit_price)
         db.add(InventoryMovement(
             inventory_id=inventory.inventory_id,
             product_id=inventory.product_id,
@@ -434,13 +465,14 @@ def approve_inventory_addition(
     ))
     if not passed_qc:
         notify_roles(db, {"manager"}, "Cold-chain exception", f"Inventory request #{item.request_id} was received outside the {approval.storage_zone.lower()} temperature range and quarantined.", "cold_chain_exception", item.warehouse_id)
-    log_activity(db, current_user["user_id"], current_user["username"], "INVENTORY_REQUEST_APPROVED", f"Approved inventory addition request #{item.request_id} for {item.quantity} units.")
-    item.status = "approved"
-    item.reviewed_by = current_user["user_id"]
-    item.reviewed_at = datetime.utcnow()
-    create_notification(db, item.requested_by, "Inventory request approved", f"Inventory request #{item.request_id} was approved.", "inventory_request_approved")
+    log_activity(db, current_user["user_id"], current_user["username"], "INVENTORY_RECEIVED", f"Received inventory addition request #{item.request_id}: {item.quantity} units, serial {serial}, batch {batch.batch_number}.")
+    item.status = "received"
+    item.serial_number = serial
+    item.received_by = current_user["user_id"]
+    item.received_at = datetime.utcnow()
+    notify_roles(db, {"manager"}, "Inventory received", f"Inventory request #{item.request_id} was received with serial {serial} and is now in inventory.", "inventory_request_received", item.warehouse_id)
     db.commit()
-    return {"message": "Inventory addition approved", "request_id": request_id, "status": item.status}
+    return {"message": "Inventory received and registered", "request_id": request_id, "status": item.status, "serial_number": serial}
 
 
 @router.patch("/addition-requests/{request_id}/reject")
@@ -452,10 +484,10 @@ def reject_inventory_addition(
     item = db.query(InventoryAdditionRequest).filter(
         InventoryAdditionRequest.request_id == request_id,
         InventoryAdditionRequest.warehouse_id == current_user.get("warehouse_id"),
-        InventoryAdditionRequest.status == "pending",
+        InventoryAdditionRequest.status.in_(["pending", "approved"]),
     ).with_for_update().first()
     if item is None:
-        raise HTTPException(status_code=404, detail="Pending inventory request not found")
+        raise HTTPException(status_code=404, detail="Open inventory request not found")
     item.status = "rejected"
     item.reviewed_by = current_user["user_id"]
     item.reviewed_at = datetime.utcnow()
@@ -484,29 +516,29 @@ def reduce_inventory_by_scan(
             "duplicate": True,
         }
 
-    match = db.query(BoxedUnit, Inventory, Product, Batch).join(
-        Inventory, BoxedUnit.inventory_id == Inventory.inventory_id
-    ).join(Product, Inventory.product_id == Product.product_id).join(
+    candidates = db.query(Inventory, Product, Batch).join(
+        Product, Inventory.product_id == Product.product_id
+    ).join(
         Batch, Inventory.batch_id == Batch.batch_id
     ).filter(
         Inventory.warehouse_id == current_user.get("warehouse_id"),
-        BoxedUnit.remaining_units >= scan.quantity,
-        (BoxedUnit.scanned_code == scan.scanned_code) | (BoxedUnit.box_code == scan.scanned_code),
-    ).with_for_update().first()
+        Inventory.quantity > 0,
+        Inventory.putaway_status == "confirmed",
+        Batch.status == "active",
+        Batch.expiry_date > date.today(),
+        Batch.serial_number == scan.scanned_code.strip(),
+    ).order_by(Batch.expiry_date.asc(), Inventory.inventory_id.asc()).with_for_update().all()
+    if not candidates:
+        raise HTTPException(status_code=404, detail="Serial number is not registered with available stock in this warehouse")
+    match = next(((inv, prod, bat) for inv, prod, bat in candidates if available_quantity(db, inv) >= scan.quantity), None)
     if match is None:
-        raise HTTPException(status_code=404, detail="Barcode is not registered in this warehouse")
+        raise HTTPException(status_code=400, detail="Not enough unreserved units remain for this serial number")
 
-    boxed_unit, inventory, product, batch = match
-    if inventory.putaway_status != "confirmed":
-        raise HTTPException(status_code=409, detail="Inventory must be put away before it can be picked")
-    require_available_batch(db, inventory.batch_id)
-    if boxed_unit.remaining_units < scan.quantity:
-        raise HTTPException(status_code=400, detail=f"Only {boxed_unit.remaining_units} units remain for this barcode")
+    inventory, product, batch = match
     stock_available = available_quantity(db, inventory)
     if stock_available < scan.quantity:
         raise HTTPException(status_code=400, detail=f"Only {stock_available} unreserved units remain in stock")
 
-    boxed_unit.remaining_units -= scan.quantity
     inventory.quantity -= scan.quantity
     movement = InventoryMovement(
         inventory_id=inventory.inventory_id,
@@ -530,7 +562,6 @@ def reduce_inventory_by_scan(
         "batch_number": batch.batch_number,
         "quantity_removed": scan.quantity,
         "remaining_quantity": inventory.quantity,
-        "remaining_barcode_units": boxed_unit.remaining_units,
         "duplicate": False,
     }
 
@@ -624,50 +655,6 @@ def get_inventory_history(
     ).order_by(InventoryMovement.created_at.desc()).limit(200).all()
     return {"movements": movements}
 
-@router.post("/")
-def create_inventory(
-    inventory: InventoryCreate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(
-        require_permission("update_inventory")
-    )
-):
-    if current_user["role"] == "warehouse_worker":
-        raise HTTPException(
-            status_code=403,
-            detail="Workers must submit an inventory addition request for manager approval",
-        )
-
-    require_available_batch(db, inventory.batch_id)
-
-    new_inventory = Inventory(
-        product_id=inventory.product_id,
-        warehouse_id=inventory.warehouse_id,
-        batch_id=inventory.batch_id,
-        quantity=inventory.quantity,
-        boxed_units=inventory.boxed_units,
-        units_per_box=inventory.units_per_box,
-        unit_price=inventory.unit_price,
-        box_unit_cost=inventory.box_unit_cost or inventory.unit_price * inventory.units_per_box,
-        total_box_cost=inventory.boxed_units * (inventory.box_unit_cost or inventory.unit_price * inventory.units_per_box),
-    )
-
-    if current_user["role"] == "warehouse_worker" and inventory.warehouse_id != current_user.get("warehouse_id"):
-        raise HTTPException(status_code=403, detail="You can only add inventory to your assigned warehouse")
-
-    db.add(new_inventory)
-    db.flush()
-    create_boxed_units(db, new_inventory.inventory_id, inventory.boxed_units, inventory.units_per_box, inventory.unit_price, inventory.scanned_codes)
-    db.commit()
-    db.refresh(new_inventory)
-
-    return {
-        "message": "Inventory created successfully",
-        "created_by": current_user["username"],
-        "inventory": new_inventory
-    }
-
-
 @router.get("/")
 def get_inventory(db: Session = Depends(get_db), current_user: dict = Depends(require_permission("view_inventory"))):
     process_expiry(db)
@@ -684,6 +671,7 @@ def get_inventory(db: Session = Depends(get_db), current_user: dict = Depends(re
          "storage_zone": row.storage_zone, "location_code": row.location_code, "putaway_status": row.putaway_status,
          "batch_status": db.query(Batch.status).filter(Batch.batch_id == row.batch_id).scalar(),
          "batch_number": db.query(Batch.batch_number).filter(Batch.batch_id == row.batch_id).scalar(),
+         "serial_number": db.query(Batch.serial_number).filter(Batch.batch_id == row.batch_id).scalar(),
          "boxed_unit_ids": [box.box_code for box in db.query(BoxedUnit).filter(BoxedUnit.inventory_id == row.inventory_id).all()]}
         for row in inventory
     ]}

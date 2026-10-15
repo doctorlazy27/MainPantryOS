@@ -14,6 +14,7 @@ class Product(Base):
     )
 
     name: Mapped[str] = mapped_column(String(100))
+    serial_number: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
     category: Mapped[str] = mapped_column(String(100))
     storage_section: Mapped[str] = mapped_column(String(100), nullable=False, default="General")
     shelf_number: Mapped[str] = mapped_column(String(50), nullable=False, default="Unassigned")

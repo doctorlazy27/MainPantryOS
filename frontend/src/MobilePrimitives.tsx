@@ -3,6 +3,29 @@ import { Network } from '@capacitor/network'
 import { StatusBar, Style } from '@capacitor/status-bar'
 import { Wifi, WifiOff } from 'lucide-react'
 
+// Copies each table header label onto its row cells so stacked mobile cards stay readable.
+export function TableLabels() {
+  useEffect(() => {
+    let frame = 0
+    const apply = () => {
+      document.querySelectorAll('.data-table').forEach((table) => {
+        const head = table.querySelector(':scope > .data-head')
+        if (!head) return
+        const labels = Array.from(head.children).map((cell) => cell.textContent?.trim() ?? '')
+        table.querySelectorAll(':scope > .data-row').forEach((row) => {
+          row.setAttribute('data-labelled', '')
+          Array.from(row.children).forEach((cell, index) => { if (index > 0 && labels[index] && cell.getAttribute('data-label') !== labels[index]) cell.setAttribute('data-label', labels[index]) })
+        })
+      })
+    }
+    const observer = new MutationObserver(() => { cancelAnimationFrame(frame); frame = requestAnimationFrame(apply) })
+    observer.observe(document.body, { childList: true, subtree: true })
+    apply()
+    return () => { observer.disconnect(); cancelAnimationFrame(frame) }
+  }, [])
+  return null
+}
+
 export function NativeAppEffects() {
   const [online, setOnline] = useState(true)
   const [showState, setShowState] = useState(false)

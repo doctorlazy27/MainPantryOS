@@ -10,13 +10,12 @@ PERMISSIONS = {
         "view_inventory",
         "view_ai_copilot",
         "view_activity",
-        "update_inventory",
         "manage_users",
+        "manage_cashiers",
         "manage_warehouses",
         "send_messages",
         "approve_sales_orders",
         "create_orders",
-        "request_warehouse_stock",
         "confirm_order_receipt",
         "send_invoices",
         "request_stock_transfer",
@@ -26,13 +25,11 @@ PERMISSIONS = {
         "confirm_invoices",
         "approve_inventory_requests",
         "view_inventory_recommendations",
-        "review_inventory_recommendations",
-        "create_purchase_orders",
         "view_counter_inventory",
         "view_counter_sales",
-        "request_counter_allocation",
-        "approve_counter_allocation",
-        "checkout_counter",
+        "view_store_orders",
+        "request_store_orders",
+        "receive_store_orders",
     },
 
     UserRole.WAREHOUSE_WORKER: {
@@ -43,14 +40,17 @@ PERMISSIONS = {
     "view_ai_copilot",
     "update_inventory",
     "pick_stock",
-    "process_stock_requests",
     "fulfill_orders",
     "receive_purchase_orders",
     "send_messages",
     "submit_inventory_requests",
-    "checkout_counter",
+    "view_store_orders",
+    "dispatch_store_orders",
 },
 
+    UserRole.CASHIER: {
+        "checkout_counter",
+    },
 }
 
 
