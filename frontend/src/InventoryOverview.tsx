@@ -36,7 +36,7 @@ export default function InventoryOverview({ onToast }: Props) {
       <section className="stat-grid">
         <article className="stat-card sage"><div className="stat-card-top"><span>In stock</span></div><div className="stat-value">{total}</div><div className="stat-foot">{selected.unit}</div></article>
         <article className="stat-card blue"><div className="stat-card-top"><span>Batches</span></div><div className="stat-value">{batches.filter((row) => row.quantity > 0).length}</div><div className="stat-foot">with stock</div></article>
-        <article className="stat-card amber"><div className="stat-card-top"><span>Price</span></div><div className="stat-value">${Number(selected.price).toFixed(2)}</div><div className="stat-foot">per unit</div></article>
+        <article className="stat-card amber"><div className="stat-card-top"><span>Price</span></div><div className="stat-value">₹{Number(selected.price).toFixed(2)}</div><div className="stat-foot">per unit</div></article>
         <article className="stat-card coral"><div className="stat-card-top"><span>Next expiry</span></div><div className="stat-value">{nearest.length ? `${Math.min(...nearest)}d` : '—'}</div><div className="stat-foot">days left</div></article>
       </section>
       <section className="panel data-panel">

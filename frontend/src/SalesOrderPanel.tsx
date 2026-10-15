@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useState } from 'react'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react'
 import { approveOrder, cancelOrder, fulfillOrder, getOrders, rejectOrder, Role } from './api'
 import { LoadingState } from './LoadingState'
 import { useLiveRefresh } from './useLiveRefresh'

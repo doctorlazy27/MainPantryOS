@@ -1,7 +1,6 @@
 // @ts-nocheck
-import { FormEvent, ReactNode, useEffect, useState } from 'react'
+import { Component, FormEvent, ReactNode, useEffect, useState } from 'react'
 import { App as CapacitorApp } from '@capacitor/app'
-import OrderCreation from './OrderCreation'
 import MessagingPanel from './MessagingPanel'
 import AuthAccess from './AuthAccess'
 import ReceiptPanel from './ReceiptPanel'
@@ -65,7 +64,7 @@ function navigationFor(role: Role) {
 function Workspace({ view, role, onToast, onNavigate }: { view: View; role: Role; onToast: (message: string) => void; onNavigate: (view: View) => void }) { return <><NativeAppEffects /><TableLabels /><NetworkActivityEffects /><MobileNavigation view={view} role={role} onNavigate={onNavigate} /><CopilotSidebar onToast={onToast} /><WorkspaceContent view={view} role={role} onToast={onToast} onNavigate={onNavigate} /></> }
 function WorkspaceContent({ view, role, onToast, onNavigate }: { view: View; role: Role; onToast: (message: string) => void; onNavigate: (view: View) => void }) {
   if (view === 'Overview') return <WarehouseOverview onNavigate={onNavigate} />
-  if (view === 'Orders') return <>{role === 'manager' ? <><OrderCreation onToast={onToast} /><SalesOrderPanel role={role} onToast={onToast} /><ReceiptPanel onToast={onToast} /></> : <WorkerOrderPanel onToast={onToast} />}</>
+  if (view === 'Orders') return role === 'manager' ? <OrdersErrorBoundary><><SalesOrderPanel role={role} onToast={onToast} /><ReceiptPanel onToast={onToast} /></></OrdersErrorBoundary> : <WorkerOrderPanel onToast={onToast} />
   if (view === 'Invoices') return <><InvoicePanel role={role} onToast={onToast} />{role === 'manager' && <><ManagerInvoiceSendPanel onToast={onToast} /><CounterSalesPanel onToast={onToast} /></>}</>
   if (view === 'Store Orders') return <StoreOrdersPanel role={role} onToast={onToast} />
   if (view === 'Inventory') return <InventoryHub role={role} onToast={onToast} />
@@ -79,6 +78,22 @@ function WorkspaceContent({ view, role, onToast, onNavigate }: { view: View; rol
   if (view === 'Settings') return <SettingsPanel />
   if (view === 'Team') return <><TeamManagement onToast={onToast} /><RegistrationRequests onToast={onToast} /></>
   return <><MessagingPanel role={role} /><NotificationsInteractive /></>
+}
+class OrdersErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('Manager Orders failed to render', error)
+  }
+
+  render() {
+    if (this.state.error) return <section className="panel info-banner" role="alert"><AlertTriangle size={18} /><div><strong>Orders could not be displayed</strong><span>{this.state.error.message || 'An unexpected error occurred.'} Navigate to another section and return to retry.</span></div></section>
+    return this.props.children
+  }
 }
 function MobileNavigation({ view, role, onNavigate }: { view: View; role: Role; onNavigate: (view: View) => void }) { const [moreOpen, setMoreOpen] = useState(false); useEffect(() => { const close = () => setMoreOpen(false); window.addEventListener('pantryos:close-overlays', close); return () => window.removeEventListener('pantryos:close-overlays', close) }, []); const allowed = navigationFor(role); const primary = allowed.filter((item) => ['Overview', 'Inventory', 'Store Orders'].includes(item.id)).slice(0, 3); const more = allowed.filter((item) => !primary.some((primaryItem) => primaryItem.id === item.id)); const go = (next: View) => { setMoreOpen(false); onNavigate(next) }; return <><div className={`mobile-more-scrim ${moreOpen ? 'is-visible' : ''}`} onClick={() => setMoreOpen(false)} /><div className={`mobile-more-sheet ${moreOpen ? 'is-open' : ''}`} role="dialog" aria-label="More warehouse modules"><div className="sheet-title"><strong>Warehouse modules</strong><button className="icon-button" aria-label="Close menu" onClick={() => setMoreOpen(false)}><X size={19} /></button></div>{more.map((item) => <button className={`sheet-item ${view === item.id ? 'active' : ''}`} key={item.id} onClick={() => go(item.id)}><item.icon size={19} /><span>{item.label}</span><ArrowRight size={16} /></button>)}</div><nav className="mobile-bottom-nav" aria-label="Primary navigation">{primary.map((item) => <button className={view === item.id ? 'active' : ''} key={item.id} onClick={() => go(item.id)}><item.icon size={20} /><span>{item.label === 'Dashboard' ? 'Home' : item.label}</span></button>)}<button className={moreOpen ? 'active' : ''} onClick={() => setMoreOpen((open) => !open)}><Menu size={20} /><span>More</span></button></nav></> }
 function Header({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) { return <section className="module-header"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></div>{action && <div className="module-actions">{action}</div>}</section> }

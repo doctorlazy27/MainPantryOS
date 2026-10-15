@@ -1,4 +1,7 @@
 import { FormEvent, useState } from 'react'
+import { Camera } from 'lucide-react'
+import { Capacitor } from '@capacitor/core'
+import { BarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { approveInventoryAddition, createInventoryAdditionRequest, getInventoryAdditionRequests, InventoryRequest, receiveInventoryAddition, rejectInventoryAddition, Role } from './api'
 import { LoadingState } from './LoadingState'
 import { useLiveRefresh } from './useLiveRefresh'
@@ -52,6 +55,17 @@ export default function InventoryRequestsPanel({ role, onToast }: Props) {
     } catch (error) { onToast(error instanceof Error ? error.message : 'Could not record the received product') }
   }
 
+  async function scanSerialNumber() {
+    if (!Capacitor.isNativePlatform()) { onToast('Open the app on your device to scan the serial number'); return }
+    try {
+      const permission = await BarcodeScanner.requestPermissions()
+      if (permission.camera !== 'granted') { onToast('Camera permission is required to scan the serial number'); return }
+      const result = await BarcodeScanner.scan({ autoZoom: true })
+      const serialNumber = result.barcodes[0]?.rawValue
+      if (serialNumber) setReceipt((current) => ({ ...current, serial_number: serialNumber.trim() }))
+    } catch { onToast('Scanner unavailable; enter the serial number manually') }
+  }
+
   const pending = requests.filter((item) => item.status === 'pending')
   const approved = requests.filter((item) => item.status === 'approved')
   const received = requests.filter((item) => item.status === 'received').slice(0, 10)
@@ -69,6 +83,6 @@ export default function InventoryRequestsPanel({ role, onToast }: Props) {
 
     <section className="panel data-panel"><div className="table-toolbar"><div><p className="eyebrow">Not added to inventory</p><h2>Rejected orders</h2></div><span className="table-count">{rejected.length}</span></div>{rejected.length ? rejected.map((item) => <div className="data-row compact" key={item.request_id}><strong>Request #{item.request_id}</strong><span>{summary(item)}</span><span className="pill urgent">REJECTED</span><span>{new Date(item.reviewed_at ?? item.created_at).toLocaleDateString()}</span></div>) : <p className="field-hint">No rejected inventory requests.</p>}</section>
 
-    {receivingId !== null && <div className="modal-backdrop" onMouseDown={() => setReceivingId(null)}><div className="modal" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><div><p className="eyebrow">Delivery received</p><h2>Serial, batch, and shelf details</h2></div></div><form className="form-grid" onSubmit={(event) => void confirmReceipt(event)}><label>Serial number (barcode)<input required autoFocus value={receipt.serial_number} onChange={(event) => setReceipt({ ...receipt, serial_number: event.target.value })} /></label><label>Batch number<input required value={receipt.batch_number} onChange={(event) => setReceipt({ ...receipt, batch_number: event.target.value })} /></label><label>Manufacturing date<input required type="date" value={receipt.manufacturing_date} onChange={(event) => setReceipt({ ...receipt, manufacturing_date: event.target.value })} /></label><label>Expiry date<input required type="date" value={receipt.expiry_date} onChange={(event) => setReceipt({ ...receipt, expiry_date: event.target.value })} /></label><label>Aisle<input required placeholder="Aisle A" value={receipt.aisle} onChange={(event) => setReceipt({ ...receipt, aisle: event.target.value })} /></label><label>Shelf number<input required placeholder="A-03" value={receipt.shelf_number} onChange={(event) => setReceipt({ ...receipt, shelf_number: event.target.value })} /></label><div className="form-actions"><button className="button subtle" type="button" onClick={() => setReceivingId(null)}>Cancel</button><button className="button primary" type="submit">Add to inventory</button></div></form></div></div>}
+    {receivingId !== null && <div className="modal-backdrop" onMouseDown={() => setReceivingId(null)}><div className="modal" onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><div><p className="eyebrow">Delivery received</p><h2>Serial, batch, and shelf details</h2></div></div><form className="form-grid" onSubmit={(event) => void confirmReceipt(event)}><label>Serial number (barcode)<input required autoFocus value={receipt.serial_number} onChange={(event) => setReceipt({ ...receipt, serial_number: event.target.value })} /><button className="icon-button" type="button" aria-label="Scan serial number with camera" title="Scan serial number with camera" onClick={() => void scanSerialNumber()}><Camera size={18} /></button></label><label>Batch number<input required value={receipt.batch_number} onChange={(event) => setReceipt({ ...receipt, batch_number: event.target.value })} /></label><label>Manufacturing date<input required type="date" value={receipt.manufacturing_date} onChange={(event) => setReceipt({ ...receipt, manufacturing_date: event.target.value })} /></label><label>Expiry date<input required type="date" value={receipt.expiry_date} onChange={(event) => setReceipt({ ...receipt, expiry_date: event.target.value })} /></label><label>Aisle<input required placeholder="Aisle A" value={receipt.aisle} onChange={(event) => setReceipt({ ...receipt, aisle: event.target.value })} /></label><label>Shelf number<input required placeholder="A-03" value={receipt.shelf_number} onChange={(event) => setReceipt({ ...receipt, shelf_number: event.target.value })} /></label><div className="form-actions"><button className="button subtle" type="button" onClick={() => setReceivingId(null)}>Cancel</button><button className="button primary" type="submit">Add to inventory</button></div></form></div></div>}
   </>
 }
