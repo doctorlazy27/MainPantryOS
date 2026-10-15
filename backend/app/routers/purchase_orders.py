@@ -148,7 +148,10 @@ def receive_purchase_order(
         raise HTTPException(status_code=400, detail="Every received line needs a batch number")
     if len({batch_number.casefold() for batch_number in batch_numbers}) != len(batch_numbers):
         raise HTTPException(status_code=409, detail="Each received lot needs a unique batch number")
-    existing_batch = db.query(Batch.batch_number).filter(Batch.batch_number.in_(batch_numbers)).first()
+    existing_batch = db.query(Batch.batch_number).filter(
+        Batch.batch_number.in_(batch_numbers),
+        Batch.product_id.in_([product.product_id for _item, product in resolved_items]),
+    ).first()
     if existing_batch:
         raise HTTPException(status_code=409, detail=f"Batch number {existing_batch[0]} already exists")
 

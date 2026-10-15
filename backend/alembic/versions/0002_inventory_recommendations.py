@@ -1,4 +1,4 @@
-"""Persist manager-reviewable inventory recommendations.
+﻿"""Persist manager-reviewable inventory recommendations.
 
 Revision ID: 0002_inventory_recommendations
 Revises: 0001_automation_hardening

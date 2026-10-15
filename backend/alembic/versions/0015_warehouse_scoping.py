@@ -1,4 +1,4 @@
-"""Scope products, customers, and suppliers to a single warehouse."""
+﻿"""Scope products, customers, and suppliers to a single warehouse."""
 
 from alembic import op
 import sqlalchemy as sa

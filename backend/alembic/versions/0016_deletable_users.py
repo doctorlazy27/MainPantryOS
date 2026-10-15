@@ -1,4 +1,4 @@
-"""Let user rows be deleted directly (e.g. in pgAdmin) without foreign-key errors."""
+﻿"""Let user rows be deleted directly (e.g. in pgAdmin) without foreign-key errors."""
 
 from alembic import op
 import sqlalchemy as sa

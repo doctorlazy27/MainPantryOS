@@ -386,3 +386,22 @@ summary.data-row { display: flex; flex-wrap: wrap; }
 .detail-list > div { display: grid; gap: 2px; padding: 12px; border-radius: var(--radius-sm); background: #f4f8f5; }
 .detail-list span { color: var(--muted); font-size: 12px; font-weight: 600; }
 @media (min-width: 700px) { .product-list { grid-template-columns: 1fr 1fr; } .detail-list { grid-template-columns: repeat(4, 1fr); } }
+
+/* Label/value spacing, pills and wrapping fixes */
+@media (max-width: 1023px) {
+  .data-row[data-labelled] > [data-label]:not(button)::before { margin-right: 12px; }
+  .data-row.compact[data-labelled] > span[data-label]:not(.pill):not(.role-tag) { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: right; }
+  .data-row.compact[data-labelled] > .pill[data-label], .data-row.compact[data-labelled] > .role-tag[data-label] { align-self: flex-start; gap: 6px; }
+  .data-row[data-labelled] > .pill[data-label]::before, .data-row[data-labelled] > .role-tag[data-label]::before { margin-right: 6px; color: inherit; opacity: .7; font-weight: 600; }
+  .data-row[data-labelled] > span[data-label] > .row-action { flex: 0 0 auto; }
+  .data-row, .low-stock-item, .product-card, .bill-line, .counter-stock-item { overflow-wrap: anywhere; }
+  .modal, .confirm-dialog { margin: 0; }
+  .modal-backdrop { padding-top: calc(24px + var(--safe-top)); }
+  .confirm-actions, .form-actions { gap: 12px; }
+  .confirm-dialog > * + *, .modal > * + * { margin-top: 12px; }
+  .confirm-dialog > .confirm-icon { margin-top: 0; }
+  .modal > .modal-header { margin-top: 0; }
+}
+.panel > * + .data-table, .panel > * + .counter-stock-list, .panel > * + .low-stock-list { margin-top: 4px; }
+.module-header + .panel, .module-header + section { margin-top: 2px; }
+.toast { max-width: calc(100vw - 24px); overflow-wrap: anywhere; }

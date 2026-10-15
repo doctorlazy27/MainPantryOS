@@ -1,4 +1,4 @@
-"""Merge legacy salesperson accounts into manager role.
+﻿"""Merge legacy salesperson accounts into manager role.
 
 Revision ID: 0011_salesperson_to_manager
 Revises: 0010_approval_locations

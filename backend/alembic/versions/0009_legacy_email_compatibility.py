@@ -1,4 +1,4 @@
-"""Allow legacy users without an email address.
+﻿"""Allow legacy users without an email address.
 
 Revision ID: 0009_legacy_email_compatibility
 Revises: 0008_email_otp_and_user_email

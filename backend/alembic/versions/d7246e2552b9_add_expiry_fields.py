@@ -1,4 +1,4 @@
-"""Add expiry fields
+﻿"""Add expiry fields
 
 Revision ID: d7246e2552b9
 Revises: 0003_legacy_schema_completion

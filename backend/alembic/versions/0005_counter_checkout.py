@@ -1,4 +1,4 @@
-"""Add counter inventory, allocations, and checkout bills.
+﻿"""Add counter inventory, allocations, and checkout bills.
 
 Revision ID: 0005_counter_checkout
 Revises: 0004_barcode_consumption

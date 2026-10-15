@@ -1,4 +1,4 @@
-"""Harden expiry automation and notification idempotency.
+﻿"""Harden expiry automation and notification idempotency.
 
 Revision ID: 0001_automation_hardening
 Revises: 0000_initial_schema

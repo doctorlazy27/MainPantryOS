@@ -1,4 +1,4 @@
-"""Add receiving QC, putaway, and order-pick workflow state.
+﻿"""Add receiving QC, putaway, and order-pick workflow state.
 
 Revision ID: 0012_warehouse_workflow
 Revises: 0011_salesperson_to_manager, d7246e2552b9

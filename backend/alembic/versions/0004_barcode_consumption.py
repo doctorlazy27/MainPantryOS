@@ -1,4 +1,4 @@
-"""Track remaining units for barcode stock reduction.
+﻿"""Track remaining units for barcode stock reduction.
 
 Revision ID: 0004_barcode_consumption
 Revises: d7246e2552b9

@@ -1,4 +1,4 @@
-"""Create the existing application schema for fresh databases.
+﻿"""Create the existing application schema for fresh databases.
 
 Revision ID: 0000_initial_schema
 Revises:

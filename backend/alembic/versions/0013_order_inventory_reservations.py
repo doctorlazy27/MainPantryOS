@@ -1,4 +1,4 @@
-"""Reserve inventory for approved sales orders."""
+﻿"""Reserve inventory for approved sales orders."""
 
 from datetime import date
 
@@ -6,7 +6,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0013_order_inventory_reservations"
+revision = "0013_order_reservations"
 down_revision = "0012_warehouse_workflow"
 branch_labels = None
 depends_on = None

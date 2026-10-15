@@ -1,4 +1,4 @@
-"""Add verified user email and OTP recovery.
+﻿"""Add verified user email and OTP recovery.
 
 Revision ID: 0008_email_otp_and_user_email
 Revises: 0007_shelf_metadata

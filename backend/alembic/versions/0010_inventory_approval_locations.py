@@ -1,4 +1,4 @@
-"""Defer inventory batch assignment and add aisle locations.
+﻿"""Defer inventory batch assignment and add aisle locations.
 
 Revision ID: 0010_inventory_approval_locations
 Revises: 0009_legacy_email_compatibility

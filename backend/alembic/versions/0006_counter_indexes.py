@@ -1,4 +1,4 @@
-"""Align counter indexes with ORM metadata.
+﻿"""Align counter indexes with ORM metadata.
 
 Revision ID: 0006_counter_indexes
 Revises: 0005_counter_checkout

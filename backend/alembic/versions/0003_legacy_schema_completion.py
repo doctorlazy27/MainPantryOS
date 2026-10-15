@@ -1,4 +1,4 @@
-"""Move legacy startup schema completion into an explicit migration.
+﻿"""Move legacy startup schema completion into an explicit migration.
 
 Revision ID: 0003_legacy_schema_completion
 Revises: 0002_inventory_recommendations

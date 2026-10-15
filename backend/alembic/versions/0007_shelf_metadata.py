@@ -1,4 +1,4 @@
-"""Add product storage locations.
+﻿"""Add product storage locations.
 
 Revision ID: 0007_shelf_metadata
 Revises: 0006_counter_indexes

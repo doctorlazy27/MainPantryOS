@@ -376,7 +376,7 @@ def receive_inventory_addition(
     if product is None:
         raise HTTPException(status_code=404, detail="Requested product not found")
     serial = register_product_serial(db, product, approval.serial_number)
-    if db.query(Batch.batch_id).filter(Batch.batch_number == approval.batch_number.strip(), Batch.batch_id != (item.batch_id or 0)).first():
+    if db.query(Batch.batch_id).filter(Batch.batch_number == approval.batch_number.strip(), Batch.product_id == item.product_id, Batch.batch_id != (item.batch_id or 0)).first():
         raise HTTPException(status_code=409, detail=f"Batch number {approval.batch_number.strip()} already exists")
     product.aisle = approval.aisle.strip()
     product.shelf_number = approval.shelf_number.strip()

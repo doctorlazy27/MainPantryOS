@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -8,6 +8,7 @@ from app.database import Base
 
 class Batch(Base):
     __tablename__ = "batches"
+    __table_args__ = (UniqueConstraint("product_id", "batch_number", name="uq_batches_product_batch_number"),)
 
     batch_id: Mapped[int] = mapped_column(
         Integer,

@@ -1,11 +1,11 @@
-"""Serial numbers, store orders, and manager approval before worker receipt details."""
+﻿"""Serial numbers, store orders, and manager approval before worker receipt details."""
 
 from alembic import op
 import sqlalchemy as sa
 
 
 revision = "0014_serial_store_orders"
-down_revision = "0013_order_inventory_reservations"
+down_revision = "0013_order_reservations"
 branch_labels = None
 depends_on = None
 
