@@ -34,9 +34,9 @@ def register_product_serial(db: Session, product: Product, serial: str | None, e
             product.serial_number = value
         return value
 
-    if db.query(Batch.batch_id).filter(Batch.serial_number == value).first():
+    if db.query(Batch.batch_id).filter(Batch.serial_number == value, Batch.product_id != product.product_id).first():
         raise HTTPException(status_code=409, detail=f"Serial number {value} is already registered")
-    if db.query(Product.product_id).filter(Product.serial_number == value).first():
+    if db.query(Product.product_id).filter(Product.product_id != product.product_id, Product.serial_number == value).first():
         raise HTTPException(status_code=409, detail=f"Serial number {value} is already registered")
     if not product.serial_number:
         product.serial_number = value
