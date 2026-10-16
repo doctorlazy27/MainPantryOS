@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.batch import Batch
 from app.models.product import Product
 
 
@@ -19,16 +20,24 @@ def normalize_serial(serial: str | None) -> str:
     return value
 
 
-def register_product_serial(db: Session, product: Product, serial: str | None) -> str:
-    """Bind one serial to one product line; every batch of that product shares it."""
+def register_product_serial(db: Session, product: Product, serial: str | None, existing_batch_id: int | None = None) -> str:
+    """Register a unique serial for a batch while keeping the legacy product serial."""
     value = normalize_serial(serial)
-    owner = db.query(Product).filter(
-        Product.serial_number == value,
-        Product.warehouse_id == product.warehouse_id if product.warehouse_id is not None else Product.warehouse_id.is_(None),
-    ).first()
-    if owner is not None and owner.product_id != product.product_id:
-        raise HTTPException(status_code=409, detail=f"Serial number {value} is already registered to {owner.name}")
-    if product.serial_number and product.serial_number != value:
-        raise HTTPException(status_code=409, detail=f"{product.name} is already registered with serial number {product.serial_number}")
-    product.serial_number = value
+    existing_batch = None
+    if existing_batch_id is not None:
+        existing_batch = db.query(Batch).filter(
+            Batch.batch_id == existing_batch_id,
+            Batch.product_id == product.product_id,
+        ).first()
+    if existing_batch is not None and existing_batch.serial_number == value:
+        if not product.serial_number:
+            product.serial_number = value
+        return value
+
+    if db.query(Batch.batch_id).filter(Batch.serial_number == value).first():
+        raise HTTPException(status_code=409, detail=f"Serial number {value} is already registered")
+    if db.query(Product.product_id).filter(Product.serial_number == value).first():
+        raise HTTPException(status_code=409, detail=f"Serial number {value} is already registered")
+    if not product.serial_number:
+        product.serial_number = value
     return value

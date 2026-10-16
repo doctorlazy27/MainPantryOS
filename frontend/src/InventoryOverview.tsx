@@ -32,7 +32,7 @@ export default function InventoryOverview({ onToast }: Props) {
     const nearest = batches.filter((row) => row.quantity > 0).map((row) => daysUntil(row.expiry_date)).filter((days): days is number => days !== null)
     return <>
       <button className="link-button" onClick={() => setSelectedId(null)}><ChevronLeft size={18} /> All products</button>
-      <section className="module-header"><div><p className="eyebrow">{selected.storage_section || selected.category}</p><h1>{selected.name}</h1><p>Serial number {selected.serial_number ?? 'not registered'}</p></div></section>
+      <section className="module-header"><div><p className="eyebrow">{selected.storage_section || selected.category}</p><h1>{selected.name}</h1><p>Serial numbers are assigned per batch.</p></div></section>
       <section className="stat-grid">
         <article className="stat-card sage"><div className="stat-card-top"><span>In stock</span></div><div className="stat-value">{total}</div><div className="stat-foot">{selected.unit}</div></article>
         <article className="stat-card blue"><div className="stat-card-top"><span>Batches</span></div><div className="stat-value">{batches.filter((row) => row.quantity > 0).length}</div><div className="stat-foot">with stock</div></article>
@@ -45,7 +45,7 @@ export default function InventoryOverview({ onToast }: Props) {
       </section>
       <section className="panel data-panel">
         <div className="table-toolbar"><div><p className="eyebrow">Batches</p><h2>Stock by batch</h2></div></div>
-        {batches.length ? <div className="data-table"><div className="data-head"><span>Batch</span><span>Quantity</span><span>Expiry</span><span>Location</span></div>{batches.map((row) => { const days = daysUntil(row.expiry_date); return <div className="data-row" key={row.inventory_id}><strong>{row.batch_number ?? `Batch ${row.batch_id}`}</strong><span>{row.quantity} {selected.unit}</span><span className={days !== null && days <= 7 ? 'warning-text' : ''}>{row.expiry_date ? `${new Date(row.expiry_date).toLocaleDateString()}${days !== null ? days < 0 ? ' · expired' : ` · ${days}d` : ''}` : '—'}</span><span>{row.location_code ?? 'Unassigned'}</span></div> })}</div> : <p className="field-hint">No batches have been received for this product yet.</p>}
+        {batches.length ? <div className="data-table"><div className="data-head"><span>Batch</span><span>Quantity</span><span>Expiry</span><span>Location</span></div>{batches.map((row) => { const days = daysUntil(row.expiry_date); return <div className="data-row" key={row.inventory_id}><strong>{row.batch_number ?? `Batch ${row.batch_id}`}<small>Serial {row.serial_number ?? '—'}</small></strong><span>{row.quantity} {selected.unit}</span><span className={days !== null && days <= 7 ? 'warning-text' : ''}>{row.expiry_date ? `${new Date(row.expiry_date).toLocaleDateString()}${days !== null ? days < 0 ? ' · expired' : ` · ${days}d` : ''}` : '—'}</span><span>{row.location_code ?? 'Unassigned'}</span></div> })}</div> : <p className="field-hint">No batches have been received for this product yet.</p>}
       </section>
     </>
   }

@@ -615,15 +615,41 @@ def test_worker_inventory_request_approval_has_consistent_audit(db):
     assert "INVENTORY_RECEIVED" in actions
     assert "INVENTORY_REQUEST_REJECTED" not in actions
 
+    reorder = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Beans", quantity=6, category="Canned", unit_price=2), db, actor(worker))
+    approve_inventory_addition(reorder["request_id"], db, actor(manager))
+    second_receipt = approval.model_copy(update={"serial_number": "BEANS-SERIAL-2", "batch_number": "BEANS-2"})
+    receive_inventory_addition(reorder["request_id"], second_receipt, db, actor(worker))
+    second_batch = db.query(Batch).filter_by(batch_number="BEANS-2").one()
+    assert second_batch.serial_number == "BEANS-SERIAL-2"
+    assert product.serial_number == "BEANS-SERIAL-1"
+
     other = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Rice", quantity=3, category="Dry", unit_price=1), db, actor(worker))
     approve_inventory_addition(other["request_id"], db, actor(manager))
     with pytest.raises(HTTPException) as serial_error:
-        receive_inventory_addition(other["request_id"], approval.model_copy(update={"batch_number": "RICE-1"}), db, actor(worker))
+        receive_inventory_addition(other["request_id"], approval.model_copy(update={"serial_number": "BEANS-SERIAL-2", "batch_number": "RICE-1"}), db, actor(worker))
     assert serial_error.value.status_code == 409
+
+    legacy_duplicate = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Flour", quantity=2, category="Dry", unit_price=1), db, actor(worker))
+    approve_inventory_addition(legacy_duplicate["request_id"], db, actor(manager))
+    with pytest.raises(HTTPException) as product_serial_error:
+        receive_inventory_addition(legacy_duplicate["request_id"], approval.model_copy(update={"batch_number": "FLOUR-1"}), db, actor(worker))
+    assert product_serial_error.value.status_code == 409
 
     rejected = request_inventory_addition(InventoryAdditionRequestCreate(product_name="Salt", quantity=1, category="Dry", unit_price=1), db, actor(worker))
     reject_inventory_addition(rejected["request_id"], db, actor(manager))
     assert db.query(InventoryAdditionRequest).filter_by(request_id=rejected["request_id"]).one().status == "rejected"
+
+
+def test_inventory_receipt_rejects_blank_required_details():
+    with pytest.raises(ValueError):
+        InventoryReceiptDetails(
+            serial_number="   ",
+            batch_number="BATCH-1",
+            manufacturing_date=date.today() - timedelta(days=1),
+            expiry_date=date.today() + timedelta(days=1),
+            aisle="A1",
+            shelf_number="S1",
+        )
 
 
 def test_counter_checkout_rejects_multiple_lines_that_overdraw_same_stock(db):
